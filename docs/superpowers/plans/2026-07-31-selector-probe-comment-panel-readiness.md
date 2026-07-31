@@ -1,69 +1,73 @@
 # Selector Probe Comment Panel Readiness Implementation Plan
 
-> **Superseded:** The user selected the core minimal design after this plan was
-> written. Do not execute this plan. Replace it after the revised design spec is
-> approved.
-
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Prevent selector capture while TikTok's comment panel is still loading, retain actionable failure evidence, and pause only comment-dependent strategies after three failed readiness attempts.
+**Goal:** Prevent final A11y capture and Dry-Run while TikTok's comment panel is loading, retry the complete transition three times, and keep readiness failures out of LLM repair.
 
-**Architecture:** Keep the existing public API, DB schema, Redis format, and page-state names. Add private semantic-stability logic to `ProbeStateRunner`, propagate its safe failure code through validation/healing, then reuse existing validation, screenshot, alert, Webhook, and alias-gate storage paths.
+**Architecture:** Add a private semantic stability gate to `ProbeStateRunner`, then let the existing observe loop reload and retry that transition up to three times. Preserve safe state-runner codes through validation and healing without changing any external interface or persistence path.
 
-**Tech Stack:** Python 3.11+, asyncio, Playwright/CDP accessibility snapshots, Flask management backend, SQLite, Redis, pytest.
+**Tech Stack:** Python 3, asyncio, Playwright/CDP semantic snapshots, pytest.
 
 ## Global Constraints
 
-- No new HTTP endpoint, DB table, Redis key format, management page, or UI setting.
-- Comment readiness timeout is 60 seconds per attempt.
-- Sample interval is 2 seconds.
-- Three consecutive stable samples are required.
-- The complete comment transition retries at most three times.
-- Disabled comment-submit controls are valid before comment text exists.
-- Comment text, comment count, avatars, timestamps, and list contents do not participate in the fingerprint.
-- Page-readiness failures do not invoke the LLM.
-- Stable absence of a required control is a selector failure and may invoke the existing LLM repair flow.
-- Terminal failure keeps the previous stable selector and pauses only strategies depending on `visible_comment_panel` aliases.
-- Manual failure holds the probe window for 60 seconds after evidence capture; scheduled failure closes after evidence capture.
-- Two dedicated Profiles and two consistent rounds per Profile remain mandatory before atomic publication or automatic recovery.
-- Every owned page must close and every test Profile must become inactive at terminal cleanup.
-
----
+- Each readiness attempt lasts at most 60 seconds.
+- Sample every two seconds.
+- Require three consecutive identical eligible fingerprints.
+- Retry the complete comment-panel transition at most three times.
+- Do not add an endpoint, database schema, Redis format, setting, or UI.
+- Do not change `worker.py`, `store.py`, alert policy, screenshots, or cleanup.
+- Readiness failures must not invoke LLM repair.
+- Existing selector failures retain the existing repair behavior.
 
 ## File Map
 
-- Modify `selector_probe/state_runner.py`: semantic readiness sampling, fingerprinting, three-attempt comment transition, bounded failure evidence.
-- Modify `selector_probe/validator.py`: preserve safe state-runner failure codes and evidence through two-Profile/two-round validation.
-- Modify `selector_probe/healing_runtime.py`: classify readiness versus selector failure and expose bounded terminal evidence/screenshot fallback.
-- Modify `selector_probe/probe.py`: preserve readiness failure results, record failed observe validations, and prevent LLM invocation for readiness failures.
-- Modify `selector_probe/worker.py`: persist terminal failure validation, capture screenshot, hold manual failure window, enqueue alias-isolated failure effect.
-- Modify `selector_probe/store.py`: label reused alias-isolated effects as comment readiness failures when appropriate; no schema change.
-- Modify `tests/test_selector_probe_state_runner.py`: readiness gate and retry unit tests.
-- Modify `tests/test_selector_probe_validator.py`: safe failure propagation tests.
-- Modify `tests/test_selector_probe_healing_runtime.py`: failure classification and screenshot fallback tests.
-- Modify `tests/test_selector_probe_observe.py`: failed validation persistence and zero-record regression tests.
-- Modify `tests/test_selector_probe_worker.py`: manual hold, failure persistence, and effect selection tests.
-- Modify `tests/test_selector_probe_policy.py`: comment-only pause and recovery behavior tests.
+- Modify `selector_probe/state_runner.py`: semantic sample, fingerprint, and 60-second stability gate.
+- Modify `selector_probe/probe.py`: three complete comment-transition attempts and safe infrastructure result propagation.
+- Modify `selector_probe/validator.py`: retain safe state-transition codes during alias aggregation.
+- Modify `selector_probe/healing_runtime.py`: classify comment readiness as infrastructure.
+- Modify `tests/test_selector_probe_state_runner.py`: stability-gate tests.
+- Modify `tests/test_selector_probe_observe.py`: reload/retry and capture-order test.
+- Modify `tests/test_selector_probe_validator.py`: state code propagation test.
+- Modify `tests/test_selector_probe_healing_runtime.py`: readiness classification and no-LLM tests.
 
 ---
 
-### Task 1: Stable Comment-Panel Gate
+### Task 1: Semantic Stability Gate and Observe Retry
 
 **Files:**
-- Modify: `selector_probe/state_runner.py:56-545`
+- Modify: `selector_probe/state_runner.py:1-545`
+- Modify: `selector_probe/probe.py:424-535`
 - Test: `tests/test_selector_probe_state_runner.py`
+- Test: `tests/test_selector_probe_observe.py`
 
 **Interfaces:**
-- Consumes: existing `extract_semantic_snapshot(page) -> SemanticSnapshot`, `resolve_scope(page, "visible_comment_panel")`, injected `sleep_fn`, and injected `monotonic_fn`.
-- Produces: existing `ensure_state(..., "comment_panel_open", ...) -> dict`, with added bounded keys `attempt`, `stable_samples`, `required_samples`, and `fingerprint_hash`.
-- Produces: `ProbeSafetyError.evidence: dict[str, object]`; this remains internal and is never an HTTP API.
+- Consumes: `extract_semantic_snapshot(page) -> SemanticSnapshot`, existing `scope_resolver(page, "visible_comment_panel")`, `sleep_fn`, and `monotonic_fn`.
+- Produces: existing `ensure_state(..., "comment_panel_open", ...) -> dict`; successful result also contains `stable_samples`, `required_samples`, and `fingerprint_hash`.
+- Produces: existing `ProbeSafetyError.code`, using `comment_panel_readiness_timeout`, `comment_panel_snapshot_unstable`, or `comment_panel_element_missing`.
+- Keeps all constructor callers valid; new constructor parameters are optional and internal.
 
-- [ ] **Step 1: Write failing readiness tests**
+- [ ] **Step 1: Add failing state-runner tests**
 
-Add helpers and tests to `tests/test_selector_probe_state_runner.py`. Use a fake readiness callback so tests do not require a real browser:
+Add these helpers near existing `no_sleep` and `readiness` helpers in
+`tests/test_selector_probe_state_runner.py`:
 
 ```python
-def panel_sample_sequence(*samples):
+def panel_sample(**overrides):
+    value = {
+        "panel_visible": True,
+        "input_visible": True,
+        "textbox_visible": True,
+        "submit_visible": True,
+        "submit_disabled": True,
+        "loading_marker": "",
+        "aria_busy": False,
+        "fingerprint_hash": "sha256:stable",
+    }
+    value.update(overrides)
+    return value
+
+
+def panel_sequence(*samples):
     calls = []
 
     async def check(_page):
@@ -75,52 +79,100 @@ def panel_sample_sequence(*samples):
     return check
 
 
-def stable_panel_sample(fingerprint="sha256:stable", **overrides):
-    value = {
-        "panel_visible": True,
-        "input_visible": True,
-        "textbox_visible": True,
-        "submit_visible": True,
-        "submit_disabled": True,
-        "loading_marker": "",
-        "aria_busy": False,
-        "fingerprint_hash": fingerprint,
-        "panel_bounds": (1200.0, 0.0, 720.0, 1080.0),
-    }
-    value.update(overrides)
-    return value
+async def stable_panel(_page):
+    return panel_sample()
+```
 
+Add these tests:
 
-def ready_runner_for_panel(**overrides):
-    page = FakePage()
-    page.url = "https://www.tiktok.com/"
-    page.panel_open = True
-    locator = FakeClickLocator(page, opens=True)
-
-    async def resolver(*_args):
-        return SimpleNamespace(locator=locator, candidate={"id": "entry"})
-
-    values = {
-        "target_url": "https://www.tiktok.com/",
-        "readiness_check": readiness(),
-        "element_resolver": resolver,
-        "scope_resolver": panel_scope,
-        "sleep_fn": no_sleep,
-        "monotonic_fn": StepClock(step=1),
-    }
-    values.update(overrides)
-    runner = ProbeStateRunner(**values)
-    runner.current_state = "feed_ready"
-    return runner, page
-
-
-def test_comment_panel_requires_three_stable_samples():
+```python
+def test_comment_panel_requires_three_identical_eligible_samples():
     async def scenario():
-        check = panel_sample_sequence(
-            stable_panel_sample("sha256:a"),
-            stable_panel_sample("sha256:b"),
-            stable_panel_sample("sha256:b"),
-            stable_panel_sample("sha256:b"),
+        page = FakePage()
+        locator = FakeClickLocator(page, opens=True)
+        samples = panel_sequence(
+            panel_sample(fingerprint_hash="sha256:a"),
+            panel_sample(fingerprint_hash="sha256:b"),
+            panel_sample(fingerprint_hash="sha256:b"),
+            panel_sample(fingerprint_hash="sha256:b"),
+        )
+
+        async def resolver(*_args):
+            return SimpleNamespace(locator=locator, candidate={"id": "entry"})
+
+        runner = ProbeStateRunner(
+            target_url="https://www.tiktok.com/",
+            readiness_check=readiness(),
+            element_resolver=resolver,
+            scope_resolver=panel_scope,
+            panel_readiness_check=samples,
+            comment_readiness_timeout_seconds=60,
+            comment_readiness_poll_interval_seconds=2,
+            sleep_fn=no_sleep,
+            monotonic_fn=StepClock(step=1),
+        )
+        await runner.ensure_state(page, "feed_ready", {})
+        result = await runner.ensure_state(
+            page,
+            "comment_panel_open",
+            {runner.comment_entry_alias: entry_definition()},
+        )
+
+        assert result["state"] == "comment_panel_open"
+        assert result["stable_samples"] == 3
+        assert result["fingerprint_hash"] == "sha256:b"
+        assert len(samples.calls) == 4
+        assert locator.click_count == 1
+
+    asyncio.run(scenario())
+
+
+def test_comment_panel_spinner_times_out_without_becoming_open():
+    async def scenario():
+        page = FakePage()
+        locator = FakeClickLocator(page, opens=True)
+        samples = panel_sequence(
+            panel_sample(
+                loading_marker='[role="progressbar"]',
+                fingerprint_hash="",
+            )
+        )
+
+        async def resolver(*_args):
+            return SimpleNamespace(locator=locator, candidate={"id": "entry"})
+
+        runner = ProbeStateRunner(
+            target_url="https://www.tiktok.com/",
+            readiness_check=readiness(),
+            element_resolver=resolver,
+            scope_resolver=panel_scope,
+            panel_readiness_check=samples,
+            comment_readiness_timeout_seconds=2,
+            comment_readiness_poll_interval_seconds=2,
+            sleep_fn=no_sleep,
+            monotonic_fn=StepClock(step=1),
+        )
+        await runner.ensure_state(page, "feed_ready", {})
+        with pytest.raises(ProbeSafetyError) as caught:
+            await runner.ensure_state(
+                page,
+                "comment_panel_open",
+                {runner.comment_entry_alias: entry_definition()},
+            )
+
+        assert caught.value.code == "comment_panel_readiness_timeout"
+        assert runner.current_state == "feed_ready"
+        assert locator.click_count == 1
+
+    asyncio.run(scenario())
+
+
+def test_comment_panel_changing_snapshot_is_unstable():
+    async def scenario():
+        samples = panel_sequence(
+            panel_sample(fingerprint_hash="sha256:a"),
+            panel_sample(fingerprint_hash="sha256:b"),
+            panel_sample(fingerprint_hash="sha256:c"),
         )
         page = FakePage()
         locator = FakeClickLocator(page, opens=True)
@@ -132,95 +184,91 @@ def test_comment_panel_requires_three_stable_samples():
             target_url="https://www.tiktok.com/",
             readiness_check=readiness(),
             element_resolver=resolver,
-            panel_readiness_check=check,
-            panel_timeout_seconds=60,
-            poll_interval_seconds=2,
+            scope_resolver=panel_scope,
+            panel_readiness_check=samples,
+            comment_readiness_timeout_seconds=3,
+            comment_readiness_poll_interval_seconds=2,
             sleep_fn=no_sleep,
             monotonic_fn=StepClock(step=1),
         )
         await runner.ensure_state(page, "feed_ready", {})
-        result = await runner.ensure_state(
-            page,
-            "comment_panel_open",
-            {runner.comment_entry_alias: entry_definition()},
-        )
-        assert result["stable_samples"] == 3
-        assert result["fingerprint_hash"] == "sha256:b"
-        assert len(check.calls) == 4
+        with pytest.raises(ProbeSafetyError) as caught:
+            await runner.ensure_state(
+                page,
+                "comment_panel_open",
+                {runner.comment_entry_alias: entry_definition()},
+            )
+
+        assert caught.value.code == "comment_panel_snapshot_unstable"
 
     asyncio.run(scenario())
 
 
-def test_loading_marker_never_allows_snapshot_ready():
+def test_stable_panel_missing_submit_is_selector_failure():
     async def scenario():
-        check = panel_sample_sequence(
-            stable_panel_sample(
-                loading_marker="spinner",
-                fingerprint_hash="",
+        samples = panel_sequence(
+            panel_sample(
+                submit_visible=False,
+                fingerprint_hash="sha256:missing",
             )
         )
-        runner, page = ready_runner_for_panel(
-            panel_readiness_check=check,
-            panel_timeout_seconds=2,
+        page = FakePage()
+        locator = FakeClickLocator(page, opens=True)
+
+        async def resolver(*_args):
+            return SimpleNamespace(locator=locator, candidate={"id": "entry"})
+
+        runner = ProbeStateRunner(
+            target_url="https://www.tiktok.com/",
+            readiness_check=readiness(),
+            element_resolver=resolver,
+            scope_resolver=panel_scope,
+            panel_readiness_check=samples,
+            sleep_fn=no_sleep,
             monotonic_fn=StepClock(step=1),
         )
+        await runner.ensure_state(page, "feed_ready", {})
         with pytest.raises(ProbeSafetyError) as caught:
             await runner.ensure_state(
                 page,
                 "comment_panel_open",
                 {runner.comment_entry_alias: entry_definition()},
             )
-        assert caught.value.code == "comment_panel_readiness_timeout"
-        assert caught.value.evidence["loading_marker"] == "spinner"
 
-    asyncio.run(scenario())
-
-
-def test_stable_missing_submit_is_selector_failure():
-    async def scenario():
-        missing = stable_panel_sample(
-            submit_visible=False,
-            fingerprint="sha256:missing-submit",
-        )
-        check = panel_sample_sequence(missing, missing, missing)
-        runner, page = ready_runner_for_panel(panel_readiness_check=check)
-        with pytest.raises(ProbeSafetyError) as caught:
-            await runner.ensure_state(
-                page,
-                "comment_panel_open",
-                {runner.comment_entry_alias: entry_definition()},
-            )
         assert caught.value.code == "comment_panel_element_missing"
-        assert caught.value.evidence["stable_samples"] == 3
 
     asyncio.run(scenario())
 
 
-def test_comment_list_changes_do_not_change_control_fingerprint():
+def test_control_fingerprint_ignores_dynamic_comment_content():
     controls = {
-        "panel_role": "section",
+        "panel_role": "region",
         "aria_busy": False,
         "input_count": 1,
         "input_role": "textbox",
         "input_name": "Add comment",
         "input_data_e2e": "comment-input",
+        "input_aria_label": "Add comment",
         "contenteditable": "true",
         "submit_count": 1,
         "submit_role": "button",
         "submit_name": "Post",
         "submit_data_e2e": "comment-post",
+        "submit_aria_label": "Post",
         "submit_disabled": True,
     }
-    first = ProbeStateRunner._hash_panel_controls(
-        {**controls, "ignored_comment_text": "first comment"}
+    assert ProbeStateRunner._hash_panel_controls(
+        {**controls, "comment_text": "first"}
+    ) == ProbeStateRunner._hash_panel_controls(
+        {**controls, "comment_text": "changed"}
     )
-    second = ProbeStateRunner._hash_panel_controls(
-        {**controls, "ignored_comment_text": "different comment"}
-    )
-    assert first == second
 ```
 
-- [ ] **Step 2: Run tests and verify failure**
+Pass `panel_readiness_check=stable_panel` to existing tests that successfully
+open or reuse a comment panel. This keeps those tests focused on click,
+override, close, and transition behavior.
+
+- [ ] **Step 2: Run state-runner tests and verify failure**
 
 Run:
 
@@ -228,11 +276,12 @@ Run:
 .\.venv\Scripts\python.exe -m pytest tests\test_selector_probe_state_runner.py -q -p no:cacheprovider
 ```
 
-Expected: new tests fail because `panel_readiness_check`, readiness evidence, and stable sampling do not exist.
+Expected: new tests fail because the constructor and stability gate do not yet
+exist.
 
-- [ ] **Step 3: Extend safe error evidence and constructor defaults**
+- [ ] **Step 3: Add semantic sampling and stability gate**
 
-In `selector_probe/state_runner.py`, import hashing/snapshot utilities and add the internal constants:
+In `selector_probe/state_runner.py`, add imports and constants:
 
 ```python
 import hashlib
@@ -240,6 +289,7 @@ import json
 from collections.abc import Mapping
 
 from selector_probe.snapshot import extract_semantic_snapshot
+
 
 _COMMENT_PANEL_LOADING_MARKERS = (
     '[data-e2e*="skeleton" i]',
@@ -254,317 +304,308 @@ _COMMENT_PANEL_SHELL_SELECTOR = (
     'section:has([data-e2e*="comment-list" i]), '
     '[role="dialog"]:has([data-e2e*="comment" i])'
 )
-_COMMENT_PANEL_ATTEMPTS = 3
 _COMMENT_PANEL_STABLE_SAMPLES = 3
-
-
-class ProbeSafetyError(RuntimeError):
-    def __init__(
-        self,
-        code: str,
-        action: str,
-        *,
-        evidence: Mapping[str, object] | None = None,
-    ):
-        self.code = code
-        self.action = action
-        self.evidence = dict(evidence or {})
-        super().__init__(f"{code}: {action}")
 ```
 
-Add the injectable internal callback while keeping existing callers valid:
+Add the callback type:
 
 ```python
 PanelReadinessCheck = Callable[[Any], Awaitable[dict]]
-
-
-def __init__(
-    self,
-    *,
-    target_url: str,
-    readiness_check: ReadinessCheck | None = None,
-    panel_readiness_check: PanelReadinessCheck | None = None,
-    # existing parameters remain in their current order
-    panel_timeout_seconds: float = 60.0,
-    poll_interval_seconds: float = 2.0,
-    # remaining existing parameters
-):
-    # existing validation and assignments
-    self.panel_readiness_check = (
-        panel_readiness_check or self._comment_panel_readiness_sample
-    )
-    self.last_panel_readiness: dict[str, object] = {}
 ```
 
-- [ ] **Step 4: Implement bounded sample and fingerprint**
+Extend `ProbeStateRunner.__init__` with optional parameters:
 
-Add private helpers to `ProbeStateRunner`. Keep raw node IDs, DOM, names unrelated to the controls, and comment contents out of the payload:
+```python
+panel_readiness_check: PanelReadinessCheck | None = None,
+comment_readiness_timeout_seconds: float = 60.0,
+comment_readiness_poll_interval_seconds: float = 2.0,
+```
+
+Validate both values are positive, then assign:
+
+```python
+self.panel_readiness_check = (
+    panel_readiness_check or self._comment_panel_readiness_sample
+)
+self.comment_readiness_timeout_seconds = (
+    comment_readiness_timeout_seconds
+)
+self.comment_readiness_poll_interval_seconds = (
+    comment_readiness_poll_interval_seconds
+)
+```
+
+Add these helpers to `ProbeStateRunner`:
 
 ```python
 @staticmethod
 def _hash_panel_controls(value: Mapping[str, object]) -> str:
-    selected = {
-        key: value.get(key)
-        for key in (
-            "panel_role",
-            "aria_busy",
-            "input_count",
-            "input_role",
-            "input_name",
-            "input_data_e2e",
-            "contenteditable",
-            "submit_count",
-            "submit_role",
-            "submit_name",
-            "submit_data_e2e",
-            "submit_disabled",
-        )
-    }
+    fields = (
+        "panel_role",
+        "aria_busy",
+        "input_count",
+        "input_role",
+        "input_name",
+        "input_data_e2e",
+        "input_aria_label",
+        "contenteditable",
+        "submit_count",
+        "submit_role",
+        "submit_name",
+        "submit_data_e2e",
+        "submit_aria_label",
+        "submit_disabled",
+    )
     encoded = json.dumps(
-        selected,
+        {key: value.get(key) for key in fields},
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),
+        allow_nan=False,
     )
-    return "sha256:" + hashlib.sha256(encoded.encode()).hexdigest()
+    return "sha256:" + hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
+@staticmethod
+def _node_inside_panel(node: object, bounds: Mapping[str, object]) -> bool:
+    node_bounds = getattr(node, "bounds", None)
+    if (
+        not isinstance(node_bounds, tuple)
+        or len(node_bounds) != 4
+        or not all(isinstance(item, (int, float)) for item in node_bounds)
+    ):
+        return False
+    x, y, width, height = node_bounds
+    center_x = x + width / 2
+    center_y = y + height / 2
+    left = float(bounds["x"])
+    top = float(bounds["y"])
+    return (
+        left <= center_x <= left + float(bounds["width"])
+        and top <= center_y <= top + float(bounds["height"])
+    )
 
-async def _comment_panel_readiness_sample(self, page: Any) -> dict:
-    snapshot = await extract_semantic_snapshot(page)
-    visible = [
-        node
-        for node in snapshot.nodes
-        if node.visible and node.in_viewport
-    ]
-    input_containers = [
-        node for node in visible
-        if node.attributes.get("data-e2e") == "comment-input"
-    ]
-    textboxes = [
-        node for node in visible
-        if node.role == "textbox"
-        and node.attributes.get("contenteditable") == "true"
-    ]
-    submits = [
-        node for node in visible
-        if node.attributes.get("data-e2e") == "comment-post"
-    ]
-    panel_locator = None
-    panel_visible = False
-    panel_bounds = None
+async def _visible_panel_locator(self, page: Any) -> Any | None:
     try:
-        panel_locator, _diagnostics = await self.scope_resolver(
-            page, "visible_comment_panel"
+        locator, _diagnostics = await self.scope_resolver(
+            page,
+            "visible_comment_panel",
         )
-        panel_visible = True
-        panel_bounds = await panel_locator.bounding_box()
+        return locator
     except LocatorResolutionError as error:
         if error.code != "element_scope_not_found":
-            raise
-        shells = page.locator(_COMMENT_PANEL_SHELL_SELECTOR)
-        visible_shells = [
-            shells.nth(index)
-            for index in range(min(await shells.count(), 10))
-            if await shells.nth(index).is_visible()
-        ]
-        if len(visible_shells) == 1:
-            panel_locator = visible_shells[0]
-            panel_visible = True
-            panel_bounds = await panel_locator.bounding_box()
+            raise ProbeSafetyError(
+                "probe_panel_check_failed",
+                "verify_comment_panel",
+            ) from None
+
+    shells = page.locator(_COMMENT_PANEL_SHELL_SELECTOR)
+    visible = []
+    for index in range(min(await shells.count(), 10)):
+        candidate = shells.nth(index)
+        if await candidate.is_visible():
+            visible.append(candidate)
+    return visible[0] if len(visible) == 1 else None
+
+async def _comment_panel_readiness_sample(self, page: Any) -> dict:
+    panel = await self._visible_panel_locator(page)
+    if panel is None:
+        return {
+            "panel_visible": False,
+            "input_visible": False,
+            "textbox_visible": False,
+            "submit_visible": False,
+            "submit_disabled": False,
+            "loading_marker": "",
+            "aria_busy": False,
+            "fingerprint_hash": "",
+        }
+
+    bounds = await panel.bounding_box()
+    if not isinstance(bounds, Mapping):
+        return {
+            "panel_visible": False,
+            "input_visible": False,
+            "textbox_visible": False,
+            "submit_visible": False,
+            "submit_disabled": False,
+            "loading_marker": "",
+            "aria_busy": False,
+            "fingerprint_hash": "",
+        }
 
     loading_marker = ""
-    loading_root = panel_locator if panel_locator is not None else page
     for selector in _COMMENT_PANEL_LOADING_MARKERS:
-        locator = loading_root.locator(selector)
-        for index in range(min(await locator.count(), 20)):
-            if await locator.nth(index).is_visible():
-                loading_marker = selector[:80]
+        markers = panel.locator(selector)
+        for index in range(min(await markers.count(), 20)):
+            if await markers.nth(index).is_visible():
+                loading_marker = selector
                 break
         if loading_marker:
             break
 
-    input_container = (
-        input_containers[0] if len(input_containers) == 1 else None
-    )
+    snapshot = await extract_semantic_snapshot(page)
+    visible_nodes = [
+        node
+        for node in snapshot.nodes
+        if node.visible
+        and node.in_viewport
+        and self._node_inside_panel(node, bounds)
+    ]
+    inputs = [
+        node
+        for node in visible_nodes
+        if node.attributes.get("data-e2e") == "comment-input"
+    ]
+    textboxes = [
+        node
+        for node in visible_nodes
+        if node.role == "textbox"
+        and (
+            node.attributes.get("contenteditable") == "true"
+            or node.states.get("editable") is True
+        )
+    ]
+    submits = [
+        node
+        for node in visible_nodes
+        if node.attributes.get("data-e2e") == "comment-post"
+    ]
     input_node = textboxes[0] if len(textboxes) == 1 else None
     submit_node = submits[0] if len(submits) == 1 else None
+    aria_busy = (await panel.get_attribute("aria-busy")) == "true"
+    panel_role = str(await panel.get_attribute("role") or "")
     semantic = {
-        "panel_role": "section" if panel_visible else "",
-        "aria_busy": any(
-            node.states.get("busy") is True
-            for node in visible
-            if node.role in {"dialog", "region"}
-        ),
-        "input_count": len(input_containers),
+        "panel_role": panel_role,
+        "aria_busy": aria_busy,
+        "input_count": len(inputs),
         "input_role": input_node.role if input_node else "",
         "input_name": input_node.name[:160] if input_node else "",
         "input_data_e2e": (
-            input_container.attributes.get("data-e2e", "")
-            if input_container else ""
+            input_node.attributes.get("data-e2e", "") if input_node else ""
+        ),
+        "input_aria_label": (
+            input_node.attributes.get("aria-label", "") if input_node else ""
         ),
         "contenteditable": (
             input_node.attributes.get("contenteditable", "")
-            if input_node else ""
+            if input_node
+            else ""
         ),
         "submit_count": len(submits),
         "submit_role": submit_node.role if submit_node else "",
         "submit_name": submit_node.name[:160] if submit_node else "",
         "submit_data_e2e": (
             submit_node.attributes.get("data-e2e", "")
-            if submit_node else ""
+            if submit_node
+            else ""
+        ),
+        "submit_aria_label": (
+            submit_node.attributes.get("aria-label", "")
+            if submit_node
+            else ""
         ),
         "submit_disabled": (
             submit_node.states.get("disabled") is True
-            if submit_node else False
+            if submit_node
+            else False
         ),
     }
     return {
-        "panel_visible": panel_visible,
-        "input_visible": len(input_containers) == 1,
+        "panel_visible": True,
+        "input_visible": len(inputs) == 1,
         "textbox_visible": len(textboxes) == 1,
         "submit_visible": len(submits) == 1,
         "submit_disabled": semantic["submit_disabled"],
         "loading_marker": loading_marker,
-        "aria_busy": semantic["aria_busy"],
+        "aria_busy": aria_busy,
         "fingerprint_hash": self._hash_panel_controls(semantic),
-        "panel_bounds": panel_bounds,
     }
-```
 
-- [ ] **Step 5: Implement three-sample stability and stable absence**
-
-Add:
-
-```python
 async def _wait_for_comment_panel_ready(self, page: Any) -> dict:
-    deadline = self.monotonic_fn() + self.panel_timeout_seconds
+    deadline = (
+        self.monotonic_fn()
+        + self.comment_readiness_timeout_seconds
+    )
     previous = ""
     stable = 0
-    eligible_seen = False
-    last: dict[str, object] = {}
+    saw_eligible = False
 
     while True:
-        sample = await self.panel_readiness_check(page)
-        last = {
-            key: sample.get(key)
-            for key in (
-                "panel_visible",
-                "input_visible",
-                "textbox_visible",
-                "submit_visible",
-                "submit_disabled",
-                "loading_marker",
-                "aria_busy",
-                "fingerprint_hash",
-                "panel_bounds",
-            )
-        }
+        try:
+            sample = await self.panel_readiness_check(page)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            sample = {}
+
         eligible = (
-            last["panel_visible"] is True
-            and not last["loading_marker"]
-            and last["aria_busy"] is False
+            sample.get("panel_visible") is True
+            and not sample.get("loading_marker")
+            and sample.get("aria_busy") is False
         )
-        fingerprint = str(last["fingerprint_hash"] or "")
+        fingerprint = str(sample.get("fingerprint_hash") or "")
         if eligible and fingerprint:
-            eligible_seen = True
+            saw_eligible = True
             stable = stable + 1 if fingerprint == previous else 1
             previous = fingerprint
-            required_missing = not all(
-                last[key] is True
-                for key in (
-                    "input_visible",
-                    "textbox_visible",
-                    "submit_visible",
-                )
-            )
             if stable >= _COMMENT_PANEL_STABLE_SAMPLES:
-                evidence = {
-                    **last,
-                    "stable_samples": stable,
-                    "required_samples": _COMMENT_PANEL_STABLE_SAMPLES,
-                }
-                self.last_panel_readiness = dict(evidence)
-                if required_missing:
+                if not all(
+                    sample.get(key) is True
+                    for key in (
+                        "input_visible",
+                        "textbox_visible",
+                        "submit_visible",
+                    )
+                ):
                     raise ProbeSafetyError(
                         "comment_panel_element_missing",
                         "open_comment_panel",
-                        evidence=evidence,
                     )
-                return evidence
+                return {
+                    **sample,
+                    "stable_samples": stable,
+                    "required_samples": _COMMENT_PANEL_STABLE_SAMPLES,
+                }
         else:
-            stable = 0
             previous = ""
+            stable = 0
 
         if self.monotonic_fn() >= deadline:
-            evidence = {
-                **last,
-                "stable_samples": stable,
-                "required_samples": _COMMENT_PANEL_STABLE_SAMPLES,
-            }
-            self.last_panel_readiness = dict(evidence)
             raise ProbeSafetyError(
                 (
                     "comment_panel_snapshot_unstable"
-                    if eligible_seen
+                    if saw_eligible
                     else "comment_panel_readiness_timeout"
                 ),
                 "open_comment_panel",
-                evidence=evidence,
             )
-        await self.sleep_fn(self.poll_interval_seconds)
+        await self.sleep_fn(
+            self.comment_readiness_poll_interval_seconds
+        )
 ```
 
-- [ ] **Step 6: Retry the complete comment transition three times**
-
-Refactor `_open_comment_panel` so locator resolution/click happens once per attempt, but page reset happens between attempts:
+Replace `_open_comment_panel`'s `_wait_for_panel_state(..., visible=True)`
+check with:
 
 ```python
-retryable = {
-    "comment_panel_readiness_timeout",
-    "comment_panel_snapshot_unstable",
+readiness = await self._wait_for_comment_panel_ready(page)
+self.current_state = "comment_panel_open"
+return {
+    "state": self.current_state,
+    "clicked": True,
+    "alias": self.comment_entry_alias,
+    "panel_visible": True,
+    "stable_samples": readiness["stable_samples"],
+    "required_samples": readiness["required_samples"],
+    "fingerprint_hash": readiness["fingerprint_hash"],
 }
-for attempt in range(1, _COMMENT_PANEL_ATTEMPTS + 1):
-    if attempt > 1:
-        await self.dispatch(page, {"type": "reload"}, elements)
-        await self.dispatch(page, {"type": "wait_ready"}, elements)
-    resolved = await self.element_resolver(
-        page, self.comment_entry_alias, definition
-    )
-    await resolved.locator.click()
-    await self._require_safe_origin(page, "open_comment_panel")
-    try:
-        readiness = await self._wait_for_comment_panel_ready(page)
-    except ProbeSafetyError as error:
-        evidence = {**error.evidence, "attempt": attempt}
-        if error.code not in retryable or attempt == _COMMENT_PANEL_ATTEMPTS:
-            raise ProbeSafetyError(
-                error.code,
-                error.action,
-                evidence=evidence,
-            ) from None
-        continue
-    self.current_state = "comment_panel_open"
-    return {
-        "state": self.current_state,
-        "clicked": True,
-        "alias": self.comment_entry_alias,
-        "panel_visible": True,
-        "attempt": attempt,
-        **{
-            key: readiness[key]
-            for key in (
-                "stable_samples",
-                "required_samples",
-                "fingerprint_hash",
-            )
-        },
-    }
 ```
 
-Retained-panel handling must call `_wait_for_comment_panel_ready` before
-returning `comment_panel_open`; it must not toggle the panel closed.
+In both retained-panel branches of `ensure_state`, call
+`_wait_for_comment_panel_ready(page)` before setting or returning
+`comment_panel_open`. Do not click an already open panel.
 
-- [ ] **Step 7: Run focused tests**
+- [ ] **Step 4: Run state-runner tests**
 
 Run:
 
@@ -572,153 +613,237 @@ Run:
 .\.venv\Scripts\python.exe -m pytest tests\test_selector_probe_state_runner.py -q -p no:cacheprovider
 ```
 
-Expected: all state-runner tests pass. Existing click-once tests must still prove one click per attempt, not repeated clicks inside one attempt.
+Expected: all tests pass. Existing click tests still show one click per
+attempt.
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 5: Add failing observe retry test**
+
+Add to `tests/test_selector_probe_observe.py`:
+
+```python
+def test_comment_readiness_reloads_three_times_before_snapshot():
+    calls = []
+    snapshots = []
+
+    class Runner:
+        comment_entry_alias = "comment-entry"
+
+        async def ensure_state(self, _page, state, _elements, **kwargs):
+            calls.append((state, kwargs.get("initial_action", "")))
+            comment_calls = sum(
+                item[0] == "comment_panel_open" for item in calls
+            )
+            if state == "comment_panel_open" and comment_calls < 3:
+                raise ProbeSafetyError(
+                    "comment_panel_readiness_timeout",
+                    "open_comment_panel",
+                )
+            return {"state": state, "ready": True}
+
+    class Snapshot:
+        def model_payload(self):
+            return {
+                "scope": "page",
+                "nodes": [
+                    {
+                        "role": "button",
+                        "name": "comments",
+                        "states": {},
+                        "attributes": {"data-e2e": "comment-icon"},
+                        "visible": True,
+                        "in_viewport": True,
+                        "actionable": True,
+                    }
+                ],
+            }
+
+    async def snapshot(_page):
+        snapshots.append(len(calls))
+        return Snapshot()
+
+    async def scenario():
+        records = await probe_module._default_observe_page(
+            object(),
+            config(),
+            {
+                "feed": {"scope": "page"},
+                "panel": {"scope": "visible_comment_panel"},
+            },
+            state_runner_factory=lambda _config: Runner(),
+            snapshot_extractor=snapshot,
+            element_inspector=lambda _page, alias, definition: (
+                asyncio.sleep(
+                    0,
+                    result={
+                        "status": "ok",
+                        "alias": alias,
+                        "scope": definition["scope"],
+                    },
+                )
+            ),
+            heartbeat=SimpleNamespace(
+                require_owned=lambda renew=False: None
+            ),
+            stop_event=None,
+        )
+
+        assert len(records) == 2
+        assert [item for item in calls if item[0] == "comment_panel_open"] == [
+            ("comment_panel_open", ""),
+            ("comment_panel_open", ""),
+            ("comment_panel_open", ""),
+        ]
+        assert [item for item in calls if item[0] == "feed_ready"] == [
+            ("feed_ready", "navigate"),
+            ("feed_ready", "reload"),
+            ("feed_ready", "reload"),
+        ]
+        assert len(snapshots) == 2
+
+    asyncio.run(scenario())
+```
+
+- [ ] **Step 6: Run observe test and verify failure**
+
+Run:
 
 ```powershell
-git add selector_probe\state_runner.py tests\test_selector_probe_state_runner.py
+.\.venv\Scripts\python.exe -m pytest tests\test_selector_probe_observe.py::test_comment_readiness_reloads_three_times_before_snapshot -q -p no:cacheprovider
+```
+
+Expected: test fails because comment transition currently has one attempt.
+
+- [ ] **Step 7: Implement three complete observe attempts**
+
+In `_default_observe_page`, use:
+
+```python
+attempts = 3
+```
+
+for both `feed_ready` and `comment_panel_open`. Add:
+
+```python
+retryable_comment_codes = {
+    "comment_panel_readiness_timeout",
+    "comment_panel_snapshot_unstable",
+}
+```
+
+In the `ProbeSafetyError` handler, before terminal progress and `raise`, add:
+
+```python
+if (
+    state == "comment_panel_open"
+    and code in retryable_comment_codes
+    and attempt < attempts
+):
+    await runner.ensure_state(
+        page,
+        "feed_ready",
+        dict(elements),
+        initial_action="reload",
+    )
+    continue
+```
+
+Do not retry `comment_panel_element_missing`; that is a selector failure.
+Snapshot extraction remains after the transition loop, so failed attempts
+cannot capture an incomplete A11y tree.
+
+- [ ] **Step 8: Run focused tests**
+
+Run:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests\test_selector_probe_state_runner.py tests\test_selector_probe_observe.py -q -p no:cacheprovider
+```
+
+Expected: all selected tests pass.
+
+- [ ] **Step 9: Commit**
+
+```powershell
+git add selector_probe\state_runner.py selector_probe\probe.py tests\test_selector_probe_state_runner.py tests\test_selector_probe_observe.py
 git commit -m "fix: wait for stable comment panel"
 ```
 
 ---
 
-### Task 2: Preserve Readiness Failure Classification
+### Task 2: Preserve Readiness Classification and Skip LLM
 
 **Files:**
-- Modify: `selector_probe/validator.py:127-921,1231-1365`
-- Modify: `selector_probe/healing_runtime.py:46-65,424-466,716-760`
-- Modify: `selector_probe/probe.py:1345-1435,1680-1725`
+- Modify: `selector_probe/validator.py:40-160,1231-1410`
+- Modify: `selector_probe/healing_runtime.py:40-70,716-760`
+- Modify: `selector_probe/probe.py:1345-1430,1680-1730`
 - Test: `tests/test_selector_probe_validator.py`
 - Test: `tests/test_selector_probe_healing_runtime.py`
+- Test: `tests/test_selector_probe_observe.py`
 
 **Interfaces:**
-- Consumes: `ProbeSafetyError.code` and `.evidence` from Task 1.
-- Produces: `ValidationRejected.evidence`.
-- Produces: healing result keys `failure_code`, `failure_evidence`, `required_state`, and `proposed_pause_aliases`.
+- Consumes: safe `ProbeSafetyError.code` from Task 1.
+- Produces: existing `ValidationRejected.code` and `required_state`.
+- Produces: existing healing result fields `failure_code`, `required_state`, and `proposed_pause_aliases`.
+- Does not add evidence, persistence, API, or UI fields.
 
-- [ ] **Step 1: Write failing propagation tests**
+- [ ] **Step 1: Add failing validator code-propagation test**
 
-Add:
+Add these imports in `tests/test_selector_probe_validator.py`:
 
 ```python
-def test_required_state_preserves_comment_readiness_failure():
-    async def scenario():
-        class Runner:
-            async def ensure_state(self, *_args, **_kwargs):
-                raise ProbeSafetyError(
-                    "comment_panel_readiness_timeout",
-                    "open_comment_panel",
-                    evidence={"attempt": 3, "stable_samples": 1},
-                )
+from selector_probe.state_runner import ProbeSafetyError
+from selector_probe.validator import _ensure_state
+```
 
-        with pytest.raises(ValidationRejected) as caught:
-            await validate_bundle_on_page(
-                object(),
-                make_bundle(
-                    {
-                        ALIAS: {
-                            "scope": "visible_comment_panel",
-                            "locators": definition()["locators"],
-                        }
-                    }
-                ),
-                {
-                    ALIAS: contract(
-                        required_state="comment_panel_open",
-                        scope="visible_comment_panel",
-                    )
-                },
-                Runner(),
+Then add:
+
+```python
+def test_ensure_state_preserves_safe_comment_readiness_code():
+    class Runner:
+        async def ensure_state(self, *_args, **_kwargs):
+            raise ProbeSafetyError(
+                "comment_panel_readiness_timeout",
+                "open_comment_panel",
             )
+
+    async def scenario():
+        with pytest.raises(ValidationRejected) as caught:
+            await _ensure_state(
+                Runner(),
+                object(),
+                "comment_panel_open",
+                {},
+                "required_state_failed",
+            )
+
         assert caught.value.code == "comment_panel_readiness_timeout"
-        assert caught.value.evidence["attempt"] == 3
+        assert caught.value.required_state == "comment_panel_open"
 
     asyncio.run(scenario())
-
-
-def test_readiness_failure_skips_llm_and_preserves_aliases():
-    model_calls = []
-    active_result = {
-            "status": "failed",
-            "failure_class": "infrastructure",
-            "failed_aliases": ["评论输入框", "评论提交按钮"],
-            "code": "comment_panel_readiness_timeout",
-            "required_state": "comment_panel_open",
-            "failure_evidence": {
-                "profile_mask": "***xctm",
-                "round_number": 1,
-                "attempt": 3,
-            },
-        }
-    runtime = SimpleNamespace(
-        model_call=lambda *_args: model_calls.append(True),
-        validate_active=lambda: active_result,
-        deterministic_candidates=lambda **_kwargs: (
-            model_calls.append("deterministic")
-        ),
-        fresh_validation_context=lambda **_kwargs: {},
-        validate_candidate=lambda _value: {},
-        repair_candidate=lambda **_kwargs: model_calls.append("repair"),
-        full_validate=lambda _value: {},
-        store_and_publish=lambda _value, _evidence: {},
-    )
-    result = run_healing_probe(runtime)
-    assert result["status"] == "infrastructure_unavailable"
-    assert result["failure_code"] == "comment_panel_readiness_timeout"
-    assert result["proposed_pause_aliases"] == [
-        "评论输入框",
-        "评论提交按钮",
-    ]
-    assert model_calls == []
 ```
 
-- [ ] **Step 2: Run tests and verify failure**
+- [ ] **Step 2: Run validator test and verify failure**
+
+Run:
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest tests\test_selector_probe_validator.py tests\test_selector_probe_healing_runtime.py -q -p no:cacheprovider
+.\.venv\Scripts\python.exe -m pytest tests\test_selector_probe_validator.py::test_ensure_state_preserves_safe_comment_readiness_code -q -p no:cacheprovider
 ```
 
-Expected: new assertions fail because state errors become `required_state_failed` and infrastructure results lose their code.
+Expected: failure because `_ensure_state` returns `required_state_failed`.
 
-- [ ] **Step 3: Add bounded evidence to `ValidationRejected`**
+- [ ] **Step 3: Preserve safe state errors and aggregate readiness first**
 
-Extend its constructor:
-
-```python
-evidence: Mapping[str, object] | None = None,
-```
-
-Store only these keys:
+In `selector_probe/validator.py`, add:
 
 ```python
-allowed = {
-    "attempt",
-    "elapsed_seconds",
-    "input_visible",
-    "textbox_visible",
-    "submit_visible",
-    "submit_disabled",
-    "loading_marker",
-    "aria_busy",
-    "stable_samples",
-    "required_samples",
-    "fingerprint_hash",
-}
-self.evidence = {
-    key: value
-    for key, value in dict(evidence or {}).items()
-    if key in allowed
+_COMMENT_READINESS_CODES = {
+    "comment_panel_readiness_timeout",
+    "comment_panel_snapshot_unstable",
 }
 ```
 
-When `validate_two_rounds` wraps a `ValidationRejected`, copy
-`evidence=error.evidence` together with profile mask, round, alias, count, and
-required state.
-
-- [ ] **Step 4: Preserve state-runner codes**
-
-Change `_ensure_state`:
+Replace `_ensure_state`'s generic exception branch with:
 
 ```python
 except Exception as error:
@@ -731,16 +856,116 @@ except Exception as error:
     raise ValidationRejected(
         selected_code,
         required_state=state,
-        evidence=getattr(error, "evidence", {}),
     ) from None
 ```
 
-When aggregating alias failures, retain the first bounded evidence object and
-pass it to the final `ValidationRejected`.
+Before final `ValidationRejected` in `validate_bundle_on_page`, select a
+readiness failure ahead of selector aggregation:
 
-- [ ] **Step 5: Classify readiness separately in `HealingRuntime`**
+```python
+readiness_failure = next(
+    (
+        item
+        for item in alias_failures
+        if item["code"] in _COMMENT_READINESS_CODES
+    ),
+    None,
+)
+first = readiness_failure or alias_failures[0]
+final_code = (
+    str(first["code"])
+    if readiness_failure is not None or len(alias_failures) == 1
+    else "selector_validation_failed"
+)
+raise ValidationRejected(
+    final_code,
+    alias=str(first["alias"]),
+    match_count=int(first["match_count"]),
+    required_state=str(first["required_state"]),
+    failures=alias_failures,
+)
+```
 
-Add:
+- [ ] **Step 4: Add failing healing classification tests**
+
+Add to `tests/test_selector_probe_healing_runtime.py`:
+
+```python
+def test_runtime_classifies_comment_readiness_as_infrastructure():
+    runtime = object.__new__(HealingRuntime)
+    runtime.contracts = {
+        "feed": SimpleNamespace(required_state="feed_ready"),
+        "comment-input": SimpleNamespace(
+            required_state="comment_panel_open"
+        ),
+        "comment-submit": SimpleNamespace(
+            required_state="comment_panel_open"
+        ),
+    }
+
+    result = runtime._validation_failure(
+        ValidationRejected(
+            "comment_panel_readiness_timeout",
+            required_state="comment_panel_open",
+        )
+    )
+
+    assert result == {
+        "status": "failed",
+        "failure_class": "infrastructure",
+        "failed_aliases": ["comment-input", "comment-submit"],
+        "code": "comment_panel_readiness_timeout",
+        "required_state": "comment_panel_open",
+    }
+
+
+def test_comment_readiness_failure_never_calls_repair_or_model():
+    calls = []
+    runtime = SimpleNamespace(
+        model_call=lambda *_args, **_kwargs: calls.append("model"),
+        validate_active=lambda: {
+            "status": "failed",
+            "failure_class": "infrastructure",
+            "failed_aliases": ["comment-input", "comment-submit"],
+            "code": "comment_panel_snapshot_unstable",
+            "required_state": "comment_panel_open",
+        },
+        deterministic_candidates=lambda **_kwargs: calls.append(
+            "deterministic"
+        ),
+        fresh_validation_context=lambda **_kwargs: {},
+        validate_candidate=lambda _value: {},
+        repair_candidate=lambda **_kwargs: calls.append("repair"),
+        full_validate=lambda _value: {},
+        store_and_publish=lambda _value, _evidence: {},
+    )
+
+    result = run_healing_probe(runtime)
+
+    assert result["status"] == "infrastructure_unavailable"
+    assert result["failure_code"] == "comment_panel_snapshot_unstable"
+    assert result["required_state"] == "comment_panel_open"
+    assert result["proposed_pause_aliases"] == [
+        "comment-input",
+        "comment-submit",
+    ]
+    assert calls == []
+```
+
+- [ ] **Step 5: Run healing tests and verify failure**
+
+Run:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests\test_selector_probe_healing_runtime.py::test_runtime_classifies_comment_readiness_as_infrastructure tests\test_selector_probe_healing_runtime.py::test_comment_readiness_failure_never_calls_repair_or_model -q -p no:cacheprovider
+```
+
+Expected: first test fails because the error becomes `zero_match`; second fails
+because generic infrastructure return discards its code and aliases.
+
+- [ ] **Step 6: Classify readiness without selector conversion**
+
+In `selector_probe/healing_runtime.py`, add:
 
 ```python
 _COMMENT_READINESS_CODES = {
@@ -749,540 +974,109 @@ _COMMENT_READINESS_CODES = {
 }
 ```
 
-In `_validation_failure`, return infrastructure without converting the code to
-`zero_match`:
+At the start of `HealingRuntime._validation_failure`, add:
 
 ```python
 if error.code in _COMMENT_READINESS_CODES:
-    return {
-        "status": "failed",
-        "failure_class": "infrastructure",
-        "failed_aliases": [
+    failures = getattr(error, "failures", ())
+    failed_aliases = [
+        str(item.get("alias"))
+        for item in failures
+        if isinstance(item, Mapping) and item.get("alias")
+    ]
+    if not failed_aliases:
+        failed_aliases = [
             alias
             for alias, contract in self.contracts.items()
             if contract.required_state == "comment_panel_open"
-        ],
+        ]
+    return {
+        "status": "failed",
+        "failure_class": "infrastructure",
+        "failed_aliases": list(dict.fromkeys(failed_aliases)),
         "code": error.code,
-        "required_state": "comment_panel_open",
-        "failure_evidence": {
-            **error.evidence,
-            "profile_mask": error.profile_mask,
-            "round_number": error.round_number,
-        },
+        "required_state": (
+            error.required_state or "comment_panel_open"
+        ),
     }
 ```
 
-`comment_panel_element_missing` must remain selector-class:
+Add `"comment_panel_element_missing"` to `_SELECTOR_FAILURE_CODES` so a stable
+missing control remains repairable.
+
+- [ ] **Step 7: Preserve infrastructure details in healing result**
+
+In `run_healing_probe`, replace:
 
 ```python
-_SELECTOR_FAILURE_CODES.add("comment_panel_element_missing")
+if not active_passed and not _selector_failure(active_result):
+    return _healing_result("infrastructure_unavailable")
 ```
 
-- [ ] **Step 6: Preserve infrastructure details in `run_healing_probe`**
-
-Extend `_healing_result` with:
-
-```python
-failure_evidence: object = None,
-```
-
-and copy it only when it is a mapping. Replace the generic infrastructure
-return:
+with:
 
 ```python
 if not active_passed and not _selector_failure(active_result):
     return _healing_result(
         "infrastructure_unavailable",
         failed_aliases=_failed_aliases(active_result),
-        failure_code=str(active_result.get("code") or "probe_unavailable"),
+        failure_code=str(
+            active_result.get("code") or "probe_unavailable"
+        ),
         required_state=str(active_result.get("required_state") or ""),
-        failure_evidence=active_result.get("failure_evidence"),
     )
 ```
 
-- [ ] **Step 7: Run focused tests**
+This branch returns before deterministic generation, repair, model calls, or
+publication.
+
+- [ ] **Step 8: Run focused regression tests**
+
+Run:
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest tests\test_selector_probe_validator.py tests\test_selector_probe_healing_runtime.py -q -p no:cacheprovider
+.\.venv\Scripts\python.exe -m pytest tests\test_selector_probe_validator.py tests\test_selector_probe_healing_runtime.py tests\test_selector_probe_observe.py -q -p no:cacheprovider
 ```
 
-Expected: all selected tests pass; readiness failure produces zero model calls.
+Expected: all selected tests pass.
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 9: Commit**
 
 ```powershell
-git add selector_probe\validator.py selector_probe\healing_runtime.py selector_probe\probe.py tests\test_selector_probe_validator.py tests\test_selector_probe_healing_runtime.py
+git add selector_probe\validator.py selector_probe\healing_runtime.py selector_probe\probe.py tests\test_selector_probe_validator.py tests\test_selector_probe_healing_runtime.py tests\test_selector_probe_observe.py
 git commit -m "fix: preserve comment readiness failures"
 ```
 
 ---
 
-### Task 3: Persist Failure, Capture Evidence, and Pause Only Comment Strategies
+## Final Verification
 
-**Files:**
-- Modify: `selector_probe/probe.py:424-710,782-900,980-1340`
-- Modify: `selector_probe/worker.py:250-370,510-545,1400-1660`
-- Modify: `selector_probe/healing_runtime.py:574-670`
-- Modify: `selector_probe/store.py:8994-9135`
-- Test: `tests/test_selector_probe_observe.py`
-- Test: `tests/test_selector_probe_worker.py`
-- Test: `tests/test_selector_probe_policy.py`
-
-**Interfaces:**
-- Consumes: healing `failure_evidence` from Task 2.
-- Produces: at least one failed `selector_validation_runs` row for terminal readiness failure.
-- Reuses: existing `selector_failure` outbox effect with alias-specific dependencies; no new outbox event type or schema migration.
-
-- [ ] **Step 1: Write failing persistence and isolation tests**
-
-Add tests proving:
-
-```python
-def test_observe_readiness_failure_records_failed_validation():
-    async def failed_observer(page, _config, _elements):
-        return [{
-            "page_state": "comment_panel_open",
-            "result": "failed",
-            "failure_code": "comment_panel_readiness_timeout",
-            "evidence": {
-                "readiness": {"attempt": 3, "stable_samples": 1},
-                "snapshot_hash": page.profile_mask,
-                "aliases": {},
-            },
-        }]
-
-    result, store, _lease, _factory = run_with_fakes(
-        observer=failed_observer,
-    )
-    assert len(store.validations) >= 1
-    assert store.validations[-1]["result"] == "failed"
-    assert (
-        store.validations[-1]["failure_code"]
-        == "comment_panel_readiness_timeout"
-    )
-    assert result["validations_recorded"] >= 1
-
-
-def test_terminal_readiness_failure_pauses_only_comment_dependency(tmp_path):
-    database = tmp_path / "probe.db"
-
-    class Runtime:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_args):
-            return False
-
-    result = worker.run_tick(
-        settings_loader=_settings,
-        store_factory=_seeded_store_factory,
-        redis_factory=lambda _url: PolicyRedis(),
-        registry_factory=lambda *_args, **_kwargs: PolicyRegistry(
-            {"version": "sel-old"}
-        ),
-        reconcile_runner=lambda *_args: {},
-        adspower_factory=lambda **_kwargs: object(),
-        healing_runtime_factory=lambda **_kwargs: Runtime(),
-        healing_runner=lambda _runtime: {
-            "status": "infrastructure_unavailable",
-            "proposed_pause_aliases": ["comment-entry"],
-            "failure_code": "comment_panel_readiness_timeout",
-            "required_state": "comment_panel_open",
-            "failure_evidence": {
-                "profile_mask": "***p000",
-                "round_number": 1,
-                "attempt": 3,
-            },
-        },
-        lease_factory=lambda *_args, **_kwargs: PolicyLease(),
-        db_path=database,
-        evidence_root=tmp_path / "evidence",
-        clock=_clock(),
-        force=True,
-    )
-    assert result["paused_strategies"] == ["comment-flow"]
-    with SelectorProbeStore(database) as store:
-        reasons = store.connection.execute(
-            """
-            SELECT strategy_id
-            FROM strategy_gate_reasons
-            WHERE source = 'probe' AND cleared_at IS NULL
-            ORDER BY strategy_id
-            """
-        ).fetchall()
-    assert [row["strategy_id"] for row in reasons] == ["comment-flow"]
-
-
-def test_manual_failure_holds_after_screenshot_before_cleanup(monkeypatch):
-    events = []
-    monkeypatch.setattr(
-        "selector_probe.worker._wait_manual_failure_window",
-        lambda *_args, **_kwargs: events.append("hold"),
-    )
-    class Runtime:
-        def __enter__(self):
-            return self
-
-        def capture_failure_screenshot(self, **payload):
-            target = Path(payload["target_path"])
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(b"redacted")
-            events.append("screenshot")
-            return target
-
-        def __exit__(self, *_args):
-            events.append("profiles:stop")
-
-    result = worker.run_tick(
-        settings_loader=_settings,
-        store_factory=_seeded_store_factory,
-        redis_factory=lambda _url: PolicyRedis(),
-        registry_factory=lambda *_args, **_kwargs: PolicyRegistry(
-            {"version": "sel-old"}
-        ),
-        reconcile_runner=lambda *_args: {},
-        adspower_factory=lambda **_kwargs: object(),
-        healing_runtime_factory=lambda **_kwargs: Runtime(),
-        healing_runner=lambda _runtime: {
-            "status": "infrastructure_unavailable",
-            "proposed_pause_aliases": ["comment-entry"],
-            "failure_code": "comment_panel_readiness_timeout",
-            "required_state": "comment_panel_open",
-            "failure_evidence": {
-                "profile_mask": "***p000",
-                "round_number": 1,
-                "attempt": 3,
-            },
-        },
-        lease_factory=lambda *_args, **_kwargs: PolicyLease(),
-        db_path=tmp_path / "probe.db",
-        evidence_root=tmp_path / "evidence",
-        clock=_clock(),
-        force=True,
-        management_request_id="manual-request",
-    )
-    assert events.index("screenshot") < events.index("hold")
-    assert events.index("hold") < events.index("profiles:stop")
-    assert result["status"] == "infrastructure_unavailable"
-```
-
-- [ ] **Step 2: Run tests and verify failure**
+- [ ] Run the complete selector-probe regression set:
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest tests\test_selector_probe_observe.py tests\test_selector_probe_worker.py tests\test_selector_probe_policy.py -q -p no:cacheprovider
+.\.venv\Scripts\python.exe -m pytest tests\test_selector_probe_state_runner.py tests\test_selector_probe_observe.py tests\test_selector_probe_validator.py tests\test_selector_probe_healing_runtime.py -q -p no:cacheprovider
 ```
 
-Expected: failure record count remains zero, no readiness screenshot is linked,
-and infrastructure failure does not pause the comment-only dependency.
+Expected: all tests pass.
 
-- [ ] **Step 3: Return a failed observe record instead of losing evidence**
+- [ ] Run one manual observe probe with both dedicated AdsPower Profiles.
 
-In `_default_observe_page`, catch terminal readiness codes around the comment
-state transition and return a bounded failed record:
-
-```python
-except ProbeSafetyError as error:
-    if state == "comment_panel_open" and error.code in {
-        "comment_panel_readiness_timeout",
-        "comment_panel_snapshot_unstable",
-    }:
-        evidence = {
-            "readiness": {
-                key: value
-                for key, value in error.evidence.items()
-                if key != "panel_bounds"
-            },
-            "semantic_snapshot": {"scope": state, "nodes": []},
-            "discoveries": [],
-            "aliases": {},
-        }
-        records.append(
-            {
-                "page_state": state,
-                "result": "failed",
-                "failure_code": error.code,
-                "evidence": evidence,
-            }
-        )
-        progress(stage_name, "failed", error.code, 3)
-        break
-    raise
-```
-
-In `_observe_profiles`, remember the first failed record while continuing safe
-Profile/round collection. Return `(profiles_observed, validations_recorded,
-first_failure_code)` and let `run_observe_probe` finish with a non-success
-status after all records have been persisted.
-
-- [ ] **Step 4: Persist healing-path failure validation**
-
-Add to `selector_probe/worker.py`:
-
-```python
-def _record_terminal_failure_evidence(
-    store: object,
-    *,
-    run_id: int,
-    attempt_token: str,
-    result: Mapping[str, object],
-) -> int:
-    evidence = result.get("failure_evidence")
-    if not isinstance(evidence, Mapping):
-        return 0
-    profile_mask = evidence.get("profile_mask")
-    round_number = evidence.get("round_number")
-    if not isinstance(profile_mask, str) or round_number not in {1, 2}:
-        return 0
-    store.record_validation(
-        run_id=run_id,
-        attempt_token=attempt_token,
-        profile_mask=profile_mask,
-        round_number=round_number,
-        page_state="comment_panel_open",
-        result="failed",
-        failure_code=str(
-            result.get("failure_code")
-            or "comment_panel_readiness_timeout"
-        ),
-        evidence={
-            key: value
-            for key, value in evidence.items()
-            if key not in {"profile_mask", "round_number", "panel_bounds"}
-        },
-    )
-    return 1
-```
-
-Set:
-
-```python
-validation_records = (
-    _record_healthy_evidence(...)
-    or _record_terminal_failure_evidence(...)
-)
-```
-
-Terminal readiness failure must therefore never persist
-`validation_records=0`.
-
-- [ ] **Step 5: Extend screenshot fallback without storing raw page data**
-
-In `HealingRuntime.capture_failure_screenshot`, when semantic alias bounds are
-unavailable, use `runner.last_panel_readiness["panel_bounds"]` only as an
-in-memory crop. Redact the rest of the viewport and every visible textbox/input
-inside the crop. Do not copy `panel_bounds` into stored public evidence.
-
-The worker must call `_capture_terminal_screenshot` for both:
-
-```python
-terminal_evidence_failure = (
-    result.get("status") == "selector_validation_failed"
-    or result.get("failure_code") in {
-        "comment_panel_readiness_timeout",
-        "comment_panel_snapshot_unstable",
-    }
-)
-```
-
-- [ ] **Step 6: Hold manual failures for 60 seconds**
-
-Add:
-
-```python
-MANUAL_FAILURE_HOLD_SECONDS = 60.0
-
-
-def _wait_manual_failure_window(stop_event: object | None) -> None:
-    wait = getattr(stop_event, "wait", None)
-    if callable(wait):
-        wait(MANUAL_FAILURE_HOLD_SECONDS)
-        return
-    time.sleep(MANUAL_FAILURE_HOLD_SECONDS)
-```
-
-Call it inside `with runtime as opened_runtime`, after screenshot capture and
-only when `management_request_id` is non-empty and the result is terminal
-failure. Scheduled runs skip it. Lease heartbeat remains active during the
-hold.
-
-- [ ] **Step 7: Reuse alias-isolated effect and label it correctly**
-
-Treat terminal readiness failure with aliases as an isolated failure when
-building policy/effect:
-
-```python
-readiness_failure = (
-    result.get("failure_code") in {
-        "comment_panel_readiness_timeout",
-        "comment_panel_snapshot_unstable",
-    }
-    and bool(failed_aliases)
-)
-isolated_failure = (
-    status == "selector_validation_failed" or readiness_failure
-)
-```
-
-Use existing `selector_failure` effect for `isolated_failure`; include the real
-failure code and comment aliases. In `_apply_selector_failure_effect`, derive:
-
-```python
-readiness = failure_code in {
-    "comment_panel_readiness_timeout",
-    "comment_panel_snapshot_unstable",
-}
-reason_code = (
-    "comment_panel_readiness_failed"
-    if readiness
-    else "selector_validation_failed"
-)
-failure_class = reason_code
-```
-
-Use `reason_code` for the gate reason/fingerprint and `failure_class` for the
-alert row. Update the existing recovery queries without changing schema:
-
-```python
-recoverable_reasons = {
-    "selector_validation_failed",
-    "comment_panel_readiness_failed",
-    "probe_validation_stale",
-    "registry_unavailable",
-}
-recoverable_alerts = {
-    "selector_validation_failed",
-    "comment_panel_readiness_failed",
-    "probe_unavailable",
-}
-```
-
-Apply these values in `recovery_pending` and `_apply_recovery_effect`. Resolve a
-`comment_panel_readiness_failed` alert only when its aliases are non-empty and
-all are covered by the newly validated/published bundle. Manual pause remains.
-
-- [ ] **Step 8: Run focused tests**
-
-```powershell
-.\.venv\Scripts\python.exe -m pytest tests\test_selector_probe_observe.py tests\test_selector_probe_worker.py tests\test_selector_probe_policy.py -q -p no:cacheprovider
-```
-
-Expected: all selected tests pass. Assert no sleep occurs for scheduled runs
-and no unrelated strategy is paused.
-
-- [ ] **Step 9: Commit**
-
-```powershell
-git add selector_probe\probe.py selector_probe\worker.py selector_probe\healing_runtime.py selector_probe\store.py tests\test_selector_probe_observe.py tests\test_selector_probe_worker.py tests\test_selector_probe_policy.py
-git commit -m "fix: isolate comment readiness failures"
-```
-
----
-
-### Task 4: Regression and Live Observe Verification
-
-**Files:**
-- Modify only if a failing regression exposes a defect in Task 1-3 files.
-- Create: `docs/superpowers/reports/2026-07-31-selector-probe-comment-panel-readiness-verification.md`
-
-**Interfaces:**
-- Consumes: completed Tasks 1-3.
-- Produces: test report and live evidence summary without raw Profile IDs, DOM, Cookies, tokens, or comment text.
-
-- [ ] **Step 1: Run focused selector/browser suite**
-
-```powershell
-.\.venv\Scripts\python.exe -m pytest tests -k "selector_probe or browser_element" -q -p no:cacheprovider
-```
-
-Expected: all selected tests pass; existing skips remain documented.
-
-- [ ] **Step 2: Run JavaScript management regression**
-
-```powershell
-npm run test:node
-```
-
-Expected: all JavaScript tests pass. No API/UI shape changed.
-
-- [ ] **Step 3: Run repository secret scan**
-
-```powershell
-.\.venv\Scripts\python.exe scripts\scan_repository_secrets.py
-```
-
-Expected:
+Verify:
 
 ```text
-secret scan passed: <count> text files
+comment panel remains open until three stable samples
+no A11y snapshot or Dry-Run occurs during failed readiness attempts
+at most three comment transition attempts per Profile/round
+readiness failure_code is preserved
+no LLM repair occurs for readiness timeout/instability
+all probe-owned pages and Profiles close after terminal result
 ```
 
-- [ ] **Step 4: Run one manual observe-mode live probe**
+## Deferred by Core Minimal Scope
 
-Temporarily use the existing in-memory observe override; do not write
-`config.json`, publish Redis selectors, or mutate gates. Verify:
-
-```text
-2 dedicated Profiles
-2 rounds per Profile
-comment readiness attempt <= 3
-stable_samples = 3
-input and submit present in final semantic snapshot
-Dry-Run passes for comment entry, input, submit
-no published_version_after
-no strategy gate mutation
-both Profiles inactive after cleanup
-```
-
-- [ ] **Step 5: Verify a controlled loading failure**
-
-Using test doubles, not production TikTok mutation, keep the panel loading
-marker visible through three attempts. Verify:
-
-```text
-failure_code = comment_panel_readiness_timeout
-validation_records >= 1
-screenshot path exists and is inside evidence root
-no LLM call
-previous selector remains active
-only comment-dependent strategy paused
-manual failure hold invoked
-all Profiles inactive after cleanup
-```
-
-- [ ] **Step 6: Write verification report**
-
-Record exact test counts, live run ID, masked Profile evidence, selector paths,
-publication/gate invariants, cleanup state, and any remaining limitation in:
-
-```text
-docs/superpowers/reports/2026-07-31-selector-probe-comment-panel-readiness-verification.md
-```
-
-- [ ] **Step 7: Commit**
-
-```powershell
-git add docs\superpowers\reports\2026-07-31-selector-probe-comment-panel-readiness-verification.md
-git commit -m "docs: verify comment panel readiness"
-```
-
----
-
-## Final Acceptance Checklist
-
-- [ ] Loading panel never reaches final A11y extraction or Dry-Run.
-- [ ] Three stable samples at two-second intervals are mandatory.
-- [ ] Each attempt has a 60-second maximum.
-- [ ] Complete transition retries exactly three times.
-- [ ] Disabled submit control is accepted.
-- [ ] Dynamic comment content cannot destabilize control fingerprint.
-- [ ] Stable missing control becomes `comment_panel_element_missing`.
-- [ ] Readiness failure never invokes LLM.
-- [ ] Terminal failure records validation evidence and screenshot.
-- [ ] `validation_records=0` cannot occur for terminal readiness failure.
-- [ ] Previous selector version remains active.
-- [ ] Only `visible_comment_panel` dependent strategies pause.
-- [ ] Manual pause remains after automatic recovery.
-- [ ] Two Profiles and two rounds remain required for atomic recovery.
-- [ ] Manual failure window holds 60 seconds; scheduled failure does not.
-- [ ] Original failure survives cleanup errors.
-- [ ] Both AdsPower test Profiles end inactive.
+- Failed-run screenshot.
+- Failed validation row when capture never begins.
+- 60-second manual debug window hold.
+- New worker/store pause or recovery behavior.
+- Guaranteed comment-only strategy pause.
+- UI or API changes.
