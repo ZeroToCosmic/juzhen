@@ -8,15 +8,97 @@ import pytest
 
 import selector_probe.validator as validator_module
 from selector_probe.contracts import ElementContract
+from selector_probe.state_runner import ProbeSafetyError
 from selector_probe.validator import (
     ResetCapture,
     ValidationRejected,
+    _ensure_state,
     validate_bundle_on_page,
     validate_two_rounds,
 )
 
 
 ALIAS = "comment-entry"
+
+
+def test_ensure_state_preserves_safe_comment_readiness_code():
+    class Runner:
+        async def ensure_state(self, *_args, **_kwargs):
+            raise ProbeSafetyError(
+                "comment_panel_readiness_timeout",
+                "open_comment_panel",
+            )
+
+    async def scenario():
+        with pytest.raises(ValidationRejected) as caught:
+            await _ensure_state(
+                Runner(),
+                object(),
+                "comment_panel_open",
+                {},
+                "required_state_failed",
+            )
+
+        assert caught.value.code == "comment_panel_readiness_timeout"
+        assert caught.value.required_state == "comment_panel_open"
+
+    asyncio.run(scenario())
+
+
+def test_page_validation_prioritizes_readiness_over_selector_failures(
+    monkeypatch,
+):
+    panel_definition = definition()
+    panel_definition["scope"] = "visible_comment_panel"
+    elements = {
+        "feed-entry": definition(),
+        "comment-input": panel_definition,
+    }
+    contracts = {
+        "feed-entry": contract(alias="feed-entry"),
+        "comment-input": contract(
+            alias="comment-input",
+            required_state="comment_panel_open",
+            scope="visible_comment_panel",
+        ),
+    }
+
+    async def inspect(*_args):
+        return {
+            "status": "error",
+            "code": "element_candidate_not_found",
+        }
+
+    class Runner:
+        async def ensure_state(self, _page, state, _elements):
+            if state == "comment_panel_open":
+                raise ProbeSafetyError(
+                    "comment_panel_snapshot_unstable",
+                    "open_comment_panel",
+                )
+            return {"state": state}
+
+    monkeypatch.setattr(
+        validator_module,
+        "inspect_visible_element",
+        inspect,
+    )
+
+    with pytest.raises(ValidationRejected) as caught:
+        asyncio.run(
+            validate_bundle_on_page(
+                object(),
+                make_bundle(elements),
+                contracts,
+                Runner(),
+            )
+        )
+
+    assert caught.value.code == "comment_panel_snapshot_unstable"
+    assert [item["code"] for item in caught.value.failures] == [
+        "zero_match",
+        "comment_panel_snapshot_unstable",
+    ]
 
 
 def canonical_hash(elements):

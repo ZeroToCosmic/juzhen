@@ -650,6 +650,92 @@ def test_validation_failure_preserves_alias_code_count_and_state():
     }
 
 
+def test_runtime_classifies_comment_readiness_as_infrastructure():
+    runtime = HealingRuntime.__new__(HealingRuntime)
+    runtime.contracts = {
+        "feed": SimpleNamespace(required_state="feed_ready"),
+        "comment-input": SimpleNamespace(
+            required_state="comment_panel_open"
+        ),
+        "comment-submit": SimpleNamespace(
+            required_state="comment_panel_open"
+        ),
+    }
+
+    result = runtime._validation_failure(
+        ValidationRejected(
+            "comment_panel_readiness_timeout",
+            required_state="comment_panel_open",
+        )
+    )
+
+    assert result == {
+        "status": "failed",
+        "failure_class": "infrastructure",
+        "failed_aliases": ["comment-input", "comment-submit"],
+        "code": "comment_panel_readiness_timeout",
+        "required_state": "comment_panel_open",
+    }
+
+
+def test_comment_panel_element_missing_remains_selector_failure():
+    runtime = HealingRuntime.__new__(HealingRuntime)
+    runtime.contracts = {}
+
+    result = runtime._validation_failure(
+        ValidationRejected(
+            "comment_panel_element_missing",
+            alias="comment-submit",
+            required_state="comment_panel_open",
+        )
+    )
+
+    assert result["failure_class"] == "selector"
+    assert result["failed_aliases"] == ["comment-submit"]
+
+
+@pytest.mark.parametrize(
+    "failure_code",
+    (
+        "comment_panel_readiness_timeout",
+        "comment_panel_snapshot_unstable",
+    ),
+)
+def test_comment_readiness_failure_never_calls_repair_or_model(
+    failure_code,
+):
+    calls = []
+    runtime = SimpleNamespace(
+        model_call=lambda *_args, **_kwargs: calls.append("model"),
+        validate_active=lambda: {
+            "status": "failed",
+            "failure_class": "infrastructure",
+            "failed_aliases": ["comment-input", "comment-submit"],
+            "code": failure_code,
+            "required_state": "comment_panel_open",
+        },
+        deterministic_candidates=lambda **_kwargs: calls.append(
+            "deterministic"
+        ),
+        fresh_validation_context=lambda **_kwargs: {},
+        validate_candidate=lambda _value: {},
+        repair_candidate=lambda **_kwargs: calls.append("repair"),
+        full_validate=lambda _value: {},
+        store_and_publish=lambda _value, _evidence: {},
+    )
+
+    result = run_healing_probe(runtime)
+
+    assert result["status"] == "infrastructure_unavailable"
+    assert result["failure_code"] == failure_code
+    assert result["required_state"] == "comment_panel_open"
+    assert result["proposed_pause_aliases"] == [
+        "comment-input",
+        "comment-submit",
+    ]
+    assert calls == []
+
+
 def test_all_alias_failure_narrows_to_submit_and_uses_panel_context():
     events = []
     runtime = HealingRuntime(

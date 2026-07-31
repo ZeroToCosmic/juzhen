@@ -46,6 +46,7 @@ from selector_probe.validator import (
 _SELECTOR_FAILURE_CODES = {
     "bundle_invalid",
     "candidate_changed",
+    "comment_panel_element_missing",
     "contracts_invalid",
     "element_identity_changed",
     "element_inspection_failed",
@@ -62,6 +63,10 @@ _SELECTOR_FAILURE_CODES = {
     "wrong_semantics",
     "zero_match",
     "multiple_match",
+}
+_COMMENT_READINESS_CODES = {
+    "comment_panel_readiness_timeout",
+    "comment_panel_snapshot_unstable",
 }
 
 
@@ -723,6 +728,28 @@ class HealingRuntime:
         self,
         error: ValidationRejected,
     ) -> dict[str, object]:
+        if error.code in _COMMENT_READINESS_CODES:
+            failures = getattr(error, "failures", ())
+            failed_aliases = [
+                str(item.get("alias"))
+                for item in failures
+                if isinstance(item, Mapping) and item.get("alias")
+            ]
+            if not failed_aliases:
+                failed_aliases = [
+                    alias
+                    for alias, contract in self.contracts.items()
+                    if contract.required_state == "comment_panel_open"
+                ]
+            return {
+                "status": "failed",
+                "failure_class": "infrastructure",
+                "failed_aliases": list(dict.fromkeys(failed_aliases)),
+                "code": error.code,
+                "required_state": (
+                    error.required_state or "comment_panel_open"
+                ),
+            }
         selector = error.code in _SELECTOR_FAILURE_CODES
         repair_code = (
             error.code

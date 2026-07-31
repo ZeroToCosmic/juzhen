@@ -24,12 +24,17 @@ from browser_public_identity import mask_profile_id
 from .contracts import ElementContract, SAFE_PROBE_ACTIONS, VALID_STATES
 from .repair import _parse_css, _parse_xpath
 from .snapshot import STABLE_ATTRIBUTES, extract_semantic_snapshot
+from .state_runner import ProbeSafetyError
 
 
 _sleep = asyncio.sleep
 
 _HASH = re.compile(r"^sha256:[0-9a-f]{64}$")
 _SAFE_CODE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+_COMMENT_READINESS_CODES = {
+    "comment_panel_readiness_timeout",
+    "comment_panel_snapshot_unstable",
+}
 _SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 _MASK = re.compile(r"^\*\*\*(?:.{4})?$", re.DOTALL)
 _ATTR = re.compile(r"^[a-z][a-z0-9:_-]{0,63}$")
@@ -1239,10 +1244,21 @@ async def _ensure_state(
         result = await runner.ensure_state(page, state, elements)
     except asyncio.CancelledError:
         raise
+    except ProbeSafetyError as error:
+        selected_code = (
+            error.code
+            if isinstance(error.code, str)
+            and _SAFE_CODE.fullmatch(error.code)
+            else code
+        )
+        raise ValidationRejected(
+            selected_code,
+            required_state=state,
+        ) from None
     except Exception:
-        raise ValidationRejected(code) from None
+        raise ValidationRejected(code, required_state=state) from None
     if not isinstance(result, Mapping) or result.get("state") != state:
-        raise ValidationRejected(code)
+        raise ValidationRejected(code, required_state=state)
 
 
 def _inspection_failure(value: object) -> tuple[str, int]:
@@ -1392,11 +1408,20 @@ async def validate_bundle_on_page(
             raise ValidationRejected("bundle_mutated")
 
     if alias_failures:
-        first = alias_failures[0]
+        readiness_failure = next(
+            (
+                item
+                for item in alias_failures
+                if item["code"] in _COMMENT_READINESS_CODES
+            ),
+            None,
+        )
+        first = readiness_failure or alias_failures[0]
         raise ValidationRejected(
             (
                 first["code"]
-                if len(alias_failures) == 1
+                if readiness_failure is not None
+                or len(alias_failures) == 1
                 else "selector_validation_failed"
             ),
             alias=str(first["alias"]),

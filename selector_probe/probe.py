@@ -40,6 +40,10 @@ _PAGE_STATES = (
     "comment_panel_open",
     "comment_panel_closed",
 )
+_COMMENT_READINESS_CODES = {
+    "comment_panel_readiness_timeout",
+    "comment_panel_snapshot_unstable",
+}
 _SAFE_CODE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 _EVIDENCE_HASH = re.compile(r"^sha256:[0-9a-f]{64}$")
 ELEMENT_REQUEST_TYPES = frozenset({"probe", "validate"})
@@ -1737,7 +1741,17 @@ def run_healing_probe(
             validation_evidence=active_result.get("evidence"),
         )
     if not active_passed and not _selector_failure(active_result):
-        return _healing_result("infrastructure_unavailable")
+        failure_code = str(active_result.get("code") or "")
+        if failure_code not in _COMMENT_READINESS_CODES:
+            return _healing_result("infrastructure_unavailable")
+        return _healing_result(
+            "infrastructure_unavailable",
+            failed_aliases=_failed_aliases(active_result),
+            failure_code=failure_code,
+            required_state=str(
+                active_result.get("required_state") or ""
+            ),
+        )
 
     repair = repair_fn or methods["repair_candidate"]
     selected_model_call = model_call or getattr(runtime, "model_call", None)
