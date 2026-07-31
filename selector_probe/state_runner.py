@@ -620,7 +620,7 @@ class ProbeStateRunner:
                     break
             if loading_marker:
                 break
-        if loading_marker or aria_busy:
+        if aria_busy:
             return {
                 "panel_visible": True,
                 "input_visible": False,

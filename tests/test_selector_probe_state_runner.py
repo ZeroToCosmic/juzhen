@@ -853,13 +853,13 @@ def test_scoped_panel_sample_ignores_old_panel_and_dynamic_comments():
 
         panel.aria_busy = True
         busy = await runner._comment_panel_readiness_sample(page)
+        assert busy["aria_busy"] is True
+        assert busy["fingerprint_hash"] == ""
+        assert panel.textbox.editable_calls == 0
         panel.aria_busy = False
         panel.visible_markers.add('[class*="spinner" i]')
         loading = await runner._comment_panel_readiness_sample(page)
         panel.visible_markers.clear()
-        assert busy["aria_busy"] is True
-        assert busy["fingerprint_hash"] == ""
-        assert panel.textbox.editable_calls == 0
         overflow_selector = '[data-e2e*="loading" i]'
         panel.marker_counts[overflow_selector] = 21
         overflow = await runner._comment_panel_readiness_sample(page)
@@ -870,16 +870,44 @@ def test_scoped_panel_sample_ignores_old_panel_and_dynamic_comments():
         after = await runner._comment_panel_readiness_sample(page)
 
         assert loading["loading_marker"] == '[class*="spinner" i]'
-        assert loading["fingerprint_hash"] == ""
-        assert panel.textbox.aria_calls == 3
-        assert panel.textbox.editable_calls == 3
-        assert panel.submit.aria_calls == 3
+        assert loading["input_visible"] is True
+        assert loading["textbox_visible"] is True
+        assert loading["submit_visible"] is True
+        assert loading["fingerprint_hash"].startswith("sha256:")
+        assert panel.textbox.aria_calls == 4
+        assert panel.textbox.editable_calls == 4
+        assert panel.submit.aria_calls == 4
         assert overflow["loading_marker"] == ""
         assert overflow["input_visible"] is True
         assert before["textbox_visible"] is True
         assert before["submit_visible"] is True
         assert before["submit_disabled"] is True
         assert after["fingerprint_hash"] == before["fingerprint_hash"]
+
+    asyncio.run(scenario())
+
+
+def test_comment_list_skeleton_does_not_hide_ready_controls():
+    async def scenario():
+        panel = FakePanel()
+        panel.visible_markers.add('[class*="skeleton" i]')
+
+        async def scope(_page, _scope):
+            return panel, {}
+
+        runner = ProbeStateRunner(
+            target_url="https://www.tiktok.com/",
+            scope_resolver=scope,
+        )
+        sample = await runner._comment_panel_readiness_sample(object())
+
+        assert sample["loading_marker"] == '[class*="skeleton" i]'
+        assert sample["aria_busy"] is False
+        assert sample["input_visible"] is True
+        assert sample["textbox_visible"] is True
+        assert sample["submit_visible"] is True
+        assert sample["submit_disabled"] is True
+        assert sample["fingerprint_hash"].startswith("sha256:")
 
     asyncio.run(scenario())
 
