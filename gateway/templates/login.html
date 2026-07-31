@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>管理后台登录</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='dashboard_shell.css') }}">
+  </head>
+  <body class="auth-page">
+    <main class="auth-shell">
+      <section id="login-view" class="auth-card" aria-labelledby="login-title">
+        <p class="auth-eyebrow">网页元素与执行策略</p>
+        <h1 id="login-title">登录管理后台</h1>
+        <p class="auth-description">请输入本机管理账号继续。</p>
+        <form id="login-form" action="{{ url_for('management_auth.login') }}" method="post">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <div class="auth-field">
+            <label for="username">用户名</label>
+            <input id="username" name="username" autocomplete="username" required>
+          </div>
+          <div class="auth-field">
+            <label for="password">密码</label>
+            <input id="password" name="password" type="password" autocomplete="current-password" required>
+          </div>
+          <p id="login-error" class="auth-error" aria-live="polite"></p>
+          <button id="login-button" class="auth-primary-button" type="submit">登录</button>
+        </form>
+      </section>
+
+      <section
+        id="password-change-view"
+        class="auth-card"
+        data-auth-view="password-change"
+        aria-labelledby="password-change-title"
+        hidden
+      >
+        <p class="auth-eyebrow">账号安全</p>
+        <h1 id="password-change-title">首次登录，请修改密码</h1>
+        <p class="auth-description">临时密码仅可用于完成本次密码修改。</p>
+        <form id="password-change-form" action="{{ url_for('management_auth.change_password') }}" method="post">
+          <div class="auth-field">
+            <label for="current-password">当前临时密码</label>
+            <input id="current-password" name="current_password" type="password" autocomplete="current-password" required>
+          </div>
+          <div class="auth-field">
+            <label for="new-password">新密码</label>
+            <input id="new-password" name="new_password" type="password" autocomplete="new-password" minlength="12" required>
+          </div>
+          <div class="auth-field">
+            <label for="confirm-password">确认新密码</label>
+            <input id="confirm-password" type="password" autocomplete="new-password" minlength="12" required>
+          </div>
+          <p id="password-change-error" class="auth-error" aria-live="polite"></p>
+          <button id="password-change-button" class="auth-primary-button" type="submit">修改密码</button>
+        </form>
+      </section>
+    </main>
+    <script defer src="{{ url_for('static', filename='auth.js') }}"></script>
+  </body>
+</html>

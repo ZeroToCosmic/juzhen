@@ -1,0 +1,13 @@
+Flask==3.1.1
+python-dotenv==1.1.1
+pytest==8.4.1
+requests[socks]==2.32.5
+openpyxl==3.1.5
+SQLAlchemy>=2.0,<3.0
+asyncmy>=0.2.9
+celery>=5.4,<6.0
+redis>=5.0,<7.0
+eventlet>=0.36,<1.0
+pywin32>=306; platform_system == "Windows"
+websocket-client>=1.8,<2.0
+playwright>=1.50,<2.0

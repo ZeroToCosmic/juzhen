@@ -1,0 +1,10 @@
+services:
+  tiktok-api:
+    image: ${TIKTOK_API_IMAGE_TAG:?Run scripts/install_tiktok_api.ps1 first.}
+    build:
+      context: ./vendor/Douyin_TikTok_Download_API
+    ports:
+      - "127.0.0.1:53281:80"
+    volumes:
+      - "./runtime/tiktok_web_config.yaml:/app/crawlers/tiktok/web/config.yaml:ro"
+    restart: unless-stopped

@@ -1,0 +1,21 @@
+{
+  "code": 200,
+  "router": "/api/tiktok/web/fetch_user_post",
+  "data": {
+    "itemList": [
+      {
+        "id": "video-1",
+        "createTime": 1720000000,
+        "desc": "First post",
+        "stats": {
+          "playCount": 101,
+          "diggCount": 12,
+          "commentCount": 3,
+          "shareCount": 4
+        }
+      }
+    ],
+    "hasMore": true,
+    "cursor": 1719999999
+  }
+}

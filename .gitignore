@@ -1,0 +1,66 @@
+.venv/
+__pycache__/
+.pytest_cache/
+.env
+config.json
+config.json.backup.*
+config.json.corrupt*
+node_modules/
+.npm-cache/
+services/tiktok_api/vendor/
+services/tiktok_api/runtime/
+data/tiktok_stats/cookie-secret.json*
+data/tiktok_stats/.cookie-secret.*
+data/stats/tiktok_cookie.json*
+data/stats/tiktok_stats.db*
+data/stats/.worker-stop-*
+data/stats/*.lock
+work/
+logs/
+outputs/
+.coverage
+htmlcov/
+test-results/
+*.log
+# Local development metadata
+.agents/
+.codex/
+.superpowers/
+
+# Credentials and real configuration
+.env
+config.json
+config.json.backup.*
+config.json.corrupt*
+config.pre-live-observe*.json
+
+# Databases and session keys
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+*.key
+*.key.*
+
+# Runtime and business data
+data/*
+!data/.gitkeep
+
+# Generated/runtime directories
+logs/
+work/
+outputs/
+__pycache__/
+.pytest_cache/
+.coverage
+htmlcov/
+test-results/
+*.log
+
+# Dependencies
+.venv/
+node_modules/
+.npm-cache/
+services/tiktok_api/vendor/
+services/tiktok_api/runtime/

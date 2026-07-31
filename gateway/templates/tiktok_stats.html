@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="csrf-token" content="{{ csrf_token }}">
+  <title>TikTok 数据统计</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='dashboard_shell.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='tiktok_stats.css') }}">
+  <script src="{{ url_for('static', filename='management_fetch.js') }}"></script>
+  <script defer src="{{ url_for('static', filename='tiktok_stats.js') }}"></script>
+</head>
+<body>
+  <div class="dashboard-shell">
+    {% set active_nav = 'tiktok-stats' %}
+    {% include '_dashboard_sidebar.html' %}
+    <main id="tiktok-stats-app" class="dashboard-main stats-page-shell">
+    <div class="page-heading">
+      <div><h1>TikTok 每日数据</h1><p>查看每个账号在所选日期内新增的作品、点赞、浏览和评论。</p></div>
+      <div class="heading-actions"><div class="view-switch" role="group" aria-label="统计视图"><button id="show-table-view" class="button" type="button">账号列表</button><button id="show-trends-view" class="button" type="button">趋势</button></div><button id="open-import" class="button primary" type="button">导入账号</button><button id="open-settings" class="button" type="button">统计设置</button></div>
+    </div>
+    <section id="summary-section" class="summary-grid" aria-label="数据概览">
+      <article class="summary-card"><span>跟踪账号</span><strong id="summary-accounts">—</strong></article>
+      <article class="summary-card"><span>新增作品</span><strong id="summary-posts" class="summary-value">—</strong></article>
+      <article class="summary-card"><span>新增点赞</span><strong id="summary-likes" class="summary-value">—</strong></article>
+      <article class="summary-card"><span>新增浏览</span><strong id="summary-views" class="summary-value">—</strong></article>
+      <article class="summary-card"><span>新增评论</span><strong id="summary-comments" class="summary-value">—</strong></article>
+    </section>
+    <section class="filter-panel" aria-labelledby="filter-title">
+      <h2 id="filter-title" class="visually-hidden">筛选数据</h2>
+      <div class="filter-grid">
+        <label>日期方式<select id="date-mode"><option value="single">单日</option><option value="range">日期范围</option></select></label>
+        <label>开始日期<input id="date-start" type="date"></label>
+        <label id="range-end-wrap" hidden>结束日期<input id="date-end" type="date"></label>
+        <label class="search-field">搜索账号<input id="account-search" type="search" placeholder="输入 TikTok 用户名" autocomplete="off"></label>
+        <label>账号状态<select id="account-status"><option value="all">全部</option><option value="enabled">正在跟踪</option><option value="disabled">已停用</option></select></label>
+        <label>数据完整度<select id="baseline-status"><option value="all">全部</option><option value="ready">数据完整</option><option value="first_day">首日数据</option><option value="missing_previous">缺少前日</option><option value="incomplete">未完整</option><option value="missing">暂无数据</option></select></label>
+        <label>排序项目<select id="sort-metric"><option value="posts">发布数量</option><option value="likes">点赞量</option><option value="views">浏览量</option><option value="comments">评论数量</option></select></label>
+        <label>排序方式<select id="sort-direction"><option value="desc">从高到低</option><option value="asc">从低到高</option></select></label>
+        <label>每页显示<select id="page-size"><option value="20">20</option><option value="50">50</option><option value="100">100</option><option value="200">200</option></select></label>
+      </div>
+      <p id="date-error" class="form-error" role="alert"></p>
+    </section>
+    <p id="page-status" class="page-status" role="status" aria-live="polite"></p>
+    <section id="table-view" class="table-card" aria-labelledby="table-title">
+      <div class="table-heading"><h2 id="table-title">账号每日变化</h2><span class="legend"><i class="negative-dot"></i>负数表示删帖或平台数据修正</span></div>
+      <div class="table-scroll"><table><thead><tr><th scope="col">账号</th><th scope="col">作品变化</th><th scope="col">点赞变化</th><th scope="col">浏览变化</th><th scope="col">评论变化</th><th scope="col">作品总量</th><th scope="col">点赞总量</th><th scope="col">浏览总量</th><th scope="col">评论总量</th><th scope="col">数据状态</th><th scope="col">操作</th></tr></thead><tbody id="stats-table-body"></tbody></table></div>
+      <p id="table-empty" class="empty-state">所选条件下暂无数据。可以调整日期或导入账号。</p>
+      <footer class="pagination" aria-label="翻页"><button id="page-previous" class="button" type="button">上一页</button><span id="page-number">第 1 / 1 页</span><button id="page-next" class="button" type="button">下一页</button></footer>
+    </section>
+    <section id="detail-view" class="view-panel" aria-labelledby="detail-title" hidden>
+      <div class="view-heading"><button id="detail-back" class="button" type="button">← 返回</button><div><h2 id="detail-title">账号详情</h2><p id="detail-identity" class="muted"></p></div></div>
+      <div id="detail-totals" class="summary-grid detail-totals" aria-label="账号最新完整总量"></div>
+      <section class="detail-card" aria-labelledby="chart-title">
+        <div class="table-heading"><h3 id="chart-title">每日变化趋势</h3><label>指标<select id="detail-chart-metric"><option value="posts">作品</option><option value="likes">点赞</option><option value="views" selected>浏览</option><option value="comments">评论</option></select></label></div>
+        <div id="detail-chart" class="daily-chart" role="img" aria-label="每日变化图"></div>
+        <p id="detail-chart-empty" class="empty-state" hidden>所选日期暂无可用趋势数据。</p>
+      </section>
+      <section class="detail-card" aria-labelledby="posts-title">
+        <div class="table-heading"><h3 id="posts-title">当前作品</h3><span class="legend">疑似删除的作品会显示警告</span></div>
+        <div class="table-scroll"><table class="posts-table"><thead><tr><th scope="col">作品文案</th><th id="post-head-published" scope="col"><button id="sort-post-published" class="sort-button" type="button">发布时间</button></th><th id="post-head-views" scope="col"><button id="sort-post-views" class="sort-button" type="button">浏览</button></th><th id="post-head-likes" scope="col"><button id="sort-post-likes" class="sort-button" type="button">点赞</button></th><th id="post-head-comments" scope="col"><button id="sort-post-comments" class="sort-button" type="button">评论</button></th><th scope="col">状态</th></tr></thead><tbody id="detail-posts-body"></tbody></table></div>
+        <p id="detail-posts-empty" class="empty-state">暂无作品数据。</p>
+      </section>
+      <div class="detail-columns">
+        <section class="detail-card" aria-labelledby="runs-title"><h3 id="runs-title">采集记录</h3><ul id="detail-runs" class="history-list"></ul><p id="detail-runs-empty" class="empty-state">暂无采集记录。</p></section>
+        <section class="detail-card" aria-labelledby="errors-title"><h3 id="errors-title">采集异常</h3><ul id="detail-errors" class="history-list"></ul><p id="detail-errors-empty" class="empty-state">暂无采集异常。</p></section>
+      </div>
+    </section>
+    <section id="trend-view" class="view-panel" aria-labelledby="trend-title" hidden>
+      <div class="view-heading"><h2 id="trend-title">账号每日趋势</h2><label>查看指标<select id="trend-metric"><option value="posts">作品变化</option><option value="likes">点赞变化</option><option value="views">浏览变化</option><option value="comments">评论变化</option></select></label></div>
+      <div class="table-scroll"><table class="trend-table"><thead id="trend-head"></thead><tbody id="trend-body"></tbody></table></div>
+      <p id="trend-empty" class="empty-state">所选条件下暂无账号。</p>
+      <footer class="pagination" aria-label="趋势账号翻页"><button id="trend-previous" class="button" type="button">上一页账号</button><span id="trend-page-number">第 1 / 1 页</span><button id="trend-next" class="button" type="button">下一页账号</button></footer>
+    </section>
+    <dialog id="import-dialog" aria-labelledby="import-title">
+      <div class="dialog-heading"><h2 id="import-title">导入 TikTok 账号</h2><button id="close-import" class="icon-button" type="button" aria-label="关闭">×</button></div>
+      <div class="dialog-grid">
+        <form id="paste-import-form" class="dialog-section"><h3>粘贴用户名</h3><p>支持每行一个，也支持 CSV 或制表符分隔。</p><label>用户名列表<textarea id="import-text" rows="10" placeholder="@creator_one&#10;creator_two" required></textarea></label><button class="button primary" type="submit">保存这些账号</button></form>
+        <form id="existing-import-form" class="dialog-section"><h3>从账号库选择</h3><p>勾选需要加入统计的账号。</p><fieldset id="existing-candidates" class="candidate-list"><legend class="visually-hidden">可选账号</legend></fieldset><button class="button primary" type="submit">加入已选账号</button></form>
+      </div>
+      <p id="import-error" class="form-error" role="alert"></p>
+      <div class="result-panel" aria-live="polite"><h3>导入结果</h3><ul id="import-results"></ul></div>
+    </dialog>
+    <dialog id="settings-dialog" aria-labelledby="settings-title">
+      <div class="dialog-heading"><h2 id="settings-title">统计设置与采集</h2><button id="close-settings" class="icon-button" type="button" aria-label="关闭">×</button></div>
+      <section class="dialog-section"><h3>TikTok Cookie</h3><p>Cookie 只用于本机采集。保存后不会再次显示原文。</p><p>当前状态：<strong id="cookie-state">正在读取…</strong></p><p id="cookie-validation" class="muted"></p><form id="cookie-form"><label>粘贴新 Cookie<input id="cookie-input" type="password" autocomplete="new-password" required></label><button class="button primary" type="submit">安全保存</button></form><button id="validate-cookie" class="button" type="button">验证是否有效</button></section>
+      <section class="dialog-section"><h3>服务状态</h3><dl class="service-grid"><div><dt>抓取服务</dt><dd id="scraper-status">正在读取…</dd></div><div><dt>定时采集</dt><dd id="worker-status">正在读取…</dd></div></dl></section>
+      <section class="dialog-section"><h3>立即采集</h3><p>操作会加入后台队列，不会阻塞当前页面。</p><div class="heading-actions"><button id="run-incremental" class="button" type="button">采集资料和最新作品</button><button id="run-full" class="button" type="button">校准全部作品</button></div></section>
+      <p id="settings-message" role="status" aria-live="polite"></p>
+    </dialog>
+    </main>
+  </div>
+</body>
+</html>

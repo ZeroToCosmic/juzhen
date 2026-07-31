@@ -1,0 +1,14 @@
+<aside class="dashboard-sidebar">
+  <a class="dashboard-brand" href="/?panel=settings">自动化主控台</a>
+  <nav class="dashboard-nav" aria-label="主导航">
+    <a class="dashboard-nav-link{% if active_nav == 'settings' %} active{% endif %}" href="/?panel=settings" data-panel="settings"{% if active_nav == 'settings' %} aria-current="page"{% endif %}>集中配置</a>
+    <a class="dashboard-nav-link{% if active_nav == 'accounts' %} active{% endif %}" href="/?panel=accounts" data-panel="accounts"{% if active_nav == 'accounts' %} aria-current="page"{% endif %}>账号花名册</a>
+    <a class="dashboard-nav-link{% if active_nav == 'proxy-config' %} active{% endif %}" href="/?panel=proxy-config" data-panel="proxy-config"{% if active_nav == 'proxy-config' %} aria-current="page"{% endif %}>代理配置</a>
+    <a class="dashboard-nav-link{% if active_nav == 'content' %} active{% endif %}" href="/?panel=content" data-panel="content"{% if active_nav == 'content' %} aria-current="page"{% endif %}>内容管理</a>
+    <a class="dashboard-nav-link{% if active_nav == 'publish' %} active{% endif %}" href="/?panel=publish" data-panel="publish"{% if active_nav == 'publish' %} aria-current="page"{% endif %}>发布管理</a>
+    <a class="dashboard-nav-link{% if active_nav == 'publish-results' %} active{% endif %}" href="/?panel=publish-results" data-panel="publish-results"{% if active_nav == 'publish-results' %} aria-current="page"{% endif %}>发布结果</a>
+    <a class="dashboard-nav-link{% if active_nav == 'tiktok-stats' %} active{% endif %}" href="/tiktok-stats" aria-label="数据统计"{% if active_nav == 'tiktok-stats' %} aria-current="page"{% endif %}>数据统计</a>
+    <a class="dashboard-nav-link{% if active_nav == 'browser' %} active{% endif %}" href="/?panel=browser" data-panel="browser"{% if active_nav == 'browser' %} aria-current="page"{% endif %}>浏览器接管</a>
+    <a class="dashboard-nav-link{% if active_nav == 'strategies' %} active{% endif %}" href="/?panel=strategies" data-panel="strategies"{% if active_nav == 'strategies' %} aria-current="page"{% endif %}>执行策略</a>
+  </nav>
+</aside>
