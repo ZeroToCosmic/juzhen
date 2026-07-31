@@ -734,16 +734,16 @@ class ProbeStateRunner:
         previous = ""
         stable = 0
         saw_eligible = False
+        saw_non_busy_panel = False
 
         def timeout_error() -> ProbeSafetyError:
-            return ProbeSafetyError(
-                (
-                    "comment_panel_snapshot_unstable"
-                    if saw_eligible
-                    else "comment_panel_readiness_timeout"
-                ),
-                "open_comment_panel",
-            )
+            if saw_eligible:
+                code = "comment_panel_snapshot_unstable"
+            elif saw_non_busy_panel:
+                code = "comment_panel_element_missing"
+            else:
+                code = "comment_panel_readiness_timeout"
+            return ProbeSafetyError(code, "open_comment_panel")
 
         def consume_cancelled_task(done: asyncio.Task) -> None:
             try:
@@ -792,29 +792,28 @@ class ProbeStateRunner:
                     "verify_comment_panel",
                 )
 
-            eligible = (
+            panel_non_busy = (
                 sample.get("panel_visible") is True
-                and not sample.get("loading_marker")
                 and sample.get("aria_busy") is False
             )
+            if panel_non_busy:
+                saw_non_busy_panel = True
+
+            controls_complete = all(
+                sample.get(key) is True
+                for key in (
+                    "input_visible",
+                    "textbox_visible",
+                    "submit_visible",
+                )
+            )
+            eligible = panel_non_busy and controls_complete
             fingerprint = str(sample.get("fingerprint_hash") or "")
             if eligible and fingerprint:
                 saw_eligible = True
                 stable = stable + 1 if fingerprint == previous else 1
                 previous = fingerprint
                 if stable >= _COMMENT_PANEL_STABLE_SAMPLES:
-                    if not all(
-                        sample.get(key) is True
-                        for key in (
-                            "input_visible",
-                            "textbox_visible",
-                            "submit_visible",
-                        )
-                    ):
-                        raise ProbeSafetyError(
-                            "comment_panel_element_missing",
-                            "open_comment_panel",
-                        )
                     return {
                         **sample,
                         "stable_samples": stable,

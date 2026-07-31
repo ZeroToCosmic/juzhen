@@ -766,13 +766,95 @@ def test_comment_panel_requires_three_identical_eligible_samples():
     asyncio.run(scenario())
 
 
+def test_wait_accepts_stable_controls_while_comment_list_loads():
+    async def scenario():
+        samples = panel_sequence(
+            panel_sample(loading_marker='[class*="skeleton" i]')
+        )
+        runner = ProbeStateRunner(
+            target_url="https://www.tiktok.com/",
+            panel_readiness_check=samples,
+            comment_readiness_timeout_seconds=20,
+            comment_readiness_poll_interval_seconds=2,
+            sleep_fn=no_sleep,
+            monotonic_fn=StepClock(step=1),
+        )
+
+        result = await runner._wait_for_comment_panel_ready(object())
+
+        assert result["stable_samples"] == 3
+        assert result["loading_marker"] == '[class*="skeleton" i]'
+        assert len(samples.calls) == 3
+
+    asyncio.run(scenario())
+
+
+def test_missing_controls_wait_until_deadline():
+    async def scenario():
+        samples = panel_sequence(
+            panel_sample(
+                submit_visible=False,
+                fingerprint_hash="sha256:missing",
+            )
+        )
+        runner = ProbeStateRunner(
+            target_url="https://www.tiktok.com/",
+            panel_readiness_check=samples,
+            comment_readiness_timeout_seconds=12,
+            comment_readiness_poll_interval_seconds=2,
+            sleep_fn=no_sleep,
+            monotonic_fn=StepClock(step=1),
+        )
+
+        with pytest.raises(ProbeSafetyError) as caught:
+            await runner._wait_for_comment_panel_ready(object())
+
+        assert caught.value.code == "comment_panel_element_missing"
+        assert len(samples.calls) == 4
+
+    asyncio.run(scenario())
+
+
+def test_delayed_controls_can_become_stable_before_deadline():
+    async def scenario():
+        missing = panel_sample(
+            submit_visible=False,
+            fingerprint_hash="sha256:missing",
+        )
+        ready = panel_sample(fingerprint_hash="sha256:ready")
+        samples = panel_sequence(
+            missing,
+            missing,
+            missing,
+            ready,
+            ready,
+            ready,
+        )
+        runner = ProbeStateRunner(
+            target_url="https://www.tiktok.com/",
+            panel_readiness_check=samples,
+            comment_readiness_timeout_seconds=30,
+            comment_readiness_poll_interval_seconds=2,
+            sleep_fn=no_sleep,
+            monotonic_fn=StepClock(step=1),
+        )
+
+        result = await runner._wait_for_comment_panel_ready(object())
+
+        assert result["fingerprint_hash"] == "sha256:ready"
+        assert result["stable_samples"] == 3
+        assert len(samples.calls) == 6
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize(
     ("sequence", "timeout", "code"),
     [
         (
             (
                 panel_sample(
-                    loading_marker='[role="progressbar"]',
+                    aria_busy=True,
                     fingerprint_hash="",
                 ),
             ),
@@ -799,7 +881,7 @@ def test_comment_panel_requires_three_identical_eligible_samples():
         ),
     ],
 )
-def test_comment_panel_rejects_loading_unstable_or_missing_controls(
+def test_comment_panel_rejects_busy_unstable_or_missing_controls(
     sequence,
     timeout,
     code,
