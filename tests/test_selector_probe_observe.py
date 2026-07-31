@@ -157,6 +157,184 @@ def test_observer_uses_validated_entry_proposal_for_panel_transition(
     asyncio.run(scenario())
 
 
+class RetrySnapshot:
+    def model_payload(self):
+        return {
+            "scope": "page",
+            "nodes": [
+                {
+                    "role": "button",
+                    "name": "comments",
+                    "states": {},
+                    "attributes": {"data-e2e": "comment-icon"},
+                    "visible": True,
+                    "in_viewport": True,
+                    "actionable": True,
+                }
+            ],
+        }
+
+
+async def retry_observe(runner, calls, snapshots, inspected, progress=None):
+    async def snapshot(_page):
+        snapshots.append(len(calls))
+        return RetrySnapshot()
+
+    async def inspect(_page, alias, definition):
+        inspected.append(alias)
+        return {
+            "status": "ok",
+            "alias": alias,
+            "scope": definition["scope"],
+        }
+
+    return await probe_module._default_observe_page(
+        object(),
+        config(),
+        {
+            "feed": {"scope": "page"},
+            "panel": {"scope": "visible_comment_panel"},
+        },
+        state_runner_factory=lambda _config: runner,
+        snapshot_extractor=snapshot,
+        element_inspector=inspect,
+        heartbeat=SimpleNamespace(require_owned=lambda renew=False: None),
+        stop_event=None,
+        progress_sink=progress.append if progress is not None else None,
+    )
+
+
+def test_comment_readiness_reloads_three_times_before_snapshot():
+    calls, snapshots, inspected = [], [], []
+
+    class Runner:
+        comment_entry_alias = "comment-entry"
+
+        async def ensure_state(self, _page, state, _elements, **kwargs):
+            calls.append((state, kwargs.get("initial_action", "")))
+            comments = sum(x[0] == "comment_panel_open" for x in calls)
+            if state == "comment_panel_open" and comments < 3:
+                raise ProbeSafetyError(
+                    "comment_panel_readiness_timeout",
+                    "open_comment_panel",
+                )
+            return {"state": state, "ready": True}
+
+    async def scenario():
+        records = await retry_observe(
+            Runner(), calls, snapshots, inspected
+        )
+        assert len(records) == 2
+        assert calls[:6] == [
+            ("feed_ready", "navigate"),
+            ("comment_panel_open", ""),
+            ("feed_ready", "reload"),
+            ("comment_panel_open", ""),
+            ("feed_ready", "reload"),
+            ("comment_panel_open", ""),
+        ]
+        assert len(snapshots) == 2
+
+    asyncio.run(scenario())
+
+
+def test_three_comment_readiness_failures_skip_comment_snapshot_and_dry_run():
+    calls, snapshots, inspected = [], [], []
+
+    class Runner:
+        comment_entry_alias = "comment-entry"
+
+        async def ensure_state(self, _page, state, _elements, **kwargs):
+            calls.append((state, kwargs.get("initial_action", "")))
+            if state == "comment_panel_open":
+                raise ProbeSafetyError(
+                    "comment_panel_snapshot_unstable",
+                    "open_comment_panel",
+                )
+            return {"state": state, "ready": True}
+
+    async def scenario():
+        with pytest.raises(ProbeSafetyError) as caught:
+            await retry_observe(Runner(), calls, snapshots, inspected)
+        assert caught.value.code == "comment_panel_snapshot_unstable"
+        assert snapshots == [1]
+        assert "panel" not in inspected
+        assert sum(x[0] == "comment_panel_open" for x in calls) == 3
+
+    asyncio.run(scenario())
+
+
+def test_poisoned_panel_sampler_is_not_reloaded_or_retried():
+    calls, snapshots, inspected = [], [], []
+
+    class Runner:
+        comment_entry_alias = "comment-entry"
+
+        async def ensure_state(self, _page, state, _elements, **kwargs):
+            calls.append((state, kwargs.get("initial_action", "")))
+            if state == "comment_panel_open":
+                raise ProbeSafetyError(
+                    "probe_panel_check_failed",
+                    "verify_comment_panel",
+                )
+            return {"state": state, "ready": True}
+
+    async def scenario():
+        with pytest.raises(ProbeSafetyError) as caught:
+            await retry_observe(Runner(), calls, snapshots, inspected)
+        assert caught.value.code == "probe_panel_check_failed"
+        assert calls == [
+            ("feed_ready", "navigate"),
+            ("comment_panel_open", ""),
+        ]
+        assert snapshots == [1]
+
+    asyncio.run(scenario())
+
+
+def test_comment_retry_continues_after_one_reload_timeout():
+    calls, snapshots, inspected, progress = [], [], [], []
+
+    class Runner:
+        comment_entry_alias = "comment-entry"
+
+        async def ensure_state(self, _page, state, _elements, **kwargs):
+            action = kwargs.get("initial_action", "")
+            calls.append((state, action))
+            reloads = calls.count(("feed_ready", "reload"))
+            comments = sum(x[0] == "comment_panel_open" for x in calls)
+            if state == "comment_panel_open" and comments == 1:
+                raise ProbeSafetyError(
+                    "comment_panel_readiness_timeout",
+                    "open_comment_panel",
+                )
+            if state == "feed_ready" and action == "reload" and reloads == 1:
+                raise ProbeSafetyError("probe_navigation_timeout", "reload")
+            return {"state": state, "ready": True}
+
+    async def scenario():
+        records = await retry_observe(
+            Runner(), calls, snapshots, inspected, progress
+        )
+        assert len(records) == 2
+        assert calls[:5] == [
+            ("feed_ready", "navigate"),
+            ("comment_panel_open", ""),
+            ("feed_ready", "reload"),
+            ("feed_ready", "reload"),
+            ("comment_panel_open", ""),
+        ]
+        transition = [
+            item
+            for item in progress
+            if item["name"] == "comment_panel_transition"
+        ]
+        assert transition[-1]["status"] == "passed"
+        assert transition[-1]["attempt_count"] == 3
+
+    asyncio.run(scenario())
+
+
 class FixedClock:
     def now(self):
         return NOW

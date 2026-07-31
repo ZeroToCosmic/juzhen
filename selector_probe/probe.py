@@ -468,6 +468,15 @@ async def _default_observe_page(
     records: list[dict[str, object]] = []
     comment_override: dict[str, object] | None = None
     transition_available = True
+    retryable_comment_codes = {
+        "comment_panel_readiness_timeout",
+        "comment_panel_snapshot_unstable",
+    }
+    retryable_feed_codes = {
+        "page_readiness_timeout",
+        "probe_navigation_timeout",
+        "probe_readiness_timeout",
+    }
     for state in states:
         if state == "comment_panel_open" and not transition_available:
             break
@@ -477,10 +486,17 @@ async def _default_observe_page(
             if state == "feed_ready"
             else "comment_panel_transition"
         )
-        attempts = 3 if state == "feed_ready" else 1
+        attempts = 3
         for attempt in range(1, attempts + 1):
             progress(stage_name, "running", attempt_count=attempt)
             try:
+                if state == "comment_panel_open" and attempt > 1:
+                    await runner.ensure_state(
+                        page,
+                        "feed_ready",
+                        dict(elements),
+                        initial_action="reload",
+                    )
                 if (
                     state == "comment_panel_open"
                     and comment_override is not None
@@ -511,11 +527,15 @@ async def _default_observe_page(
             except ProbeSafetyError as error:
                 code = _safe_error_code(error)
                 if (
+                    state == "comment_panel_open"
+                    and code
+                    in retryable_comment_codes | retryable_feed_codes
+                    and attempt < attempts
+                ):
+                    continue
+                if (
                     state == "feed_ready"
-                    and code in {
-                        "page_readiness_timeout",
-                        "probe_navigation_timeout",
-                    }
+                    and code in retryable_feed_codes
                     and attempt < attempts
                 ):
                     continue

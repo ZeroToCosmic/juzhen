@@ -4,6 +4,7 @@ from types import SimpleNamespace
 import pytest
 
 from browser_element_resolver import LocatorResolutionError
+from selector_probe import state_runner as state_runner_module
 from selector_probe.state_runner import ProbeSafetyError, ProbeStateRunner
 
 
@@ -31,6 +32,7 @@ class FakePage:
         self.url = "about:blank"
         self.redirected_url = redirected_url
         self.panel_open = False
+        self.shell_visible = False
         self.mouse = FakeMouse(self.calls)
         self.keyboard = FakeKeyboard(self)
         self.goto_kwargs = {}
@@ -46,13 +48,32 @@ class FakePage:
     async def evaluate(self, *_args, **_kwargs):
         raise AssertionError("state runner must not use page.evaluate")
 
+    def locator(self, selector):
+        visible = (
+            self.shell_visible
+            and selector
+            == state_runner_module._COMMENT_PANEL_SHELL_SELECTOR
+        )
+        return FakeVisibilityLocator([visible])
+
 
 class FakeClickLocator:
-    def __init__(self, page, *, opens=False, closes=False):
+    def __init__(
+        self,
+        page,
+        *,
+        opens=False,
+        closes=False,
+        aria_expanded=None,
+    ):
         self.page = page
         self.opens = opens
         self.closes = closes
+        self.aria_expanded = aria_expanded
         self.click_count = 0
+
+    async def get_attribute(self, name):
+        return self.aria_expanded if name == "aria-expanded" else None
 
     async def click(self):
         self.click_count += 1
@@ -130,6 +151,135 @@ class StepClock:
 
 async def no_sleep(_seconds):
     return None
+
+
+def panel_sample(**overrides):
+    value = {
+        "panel_visible": True,
+        "input_visible": True,
+        "textbox_visible": True,
+        "submit_visible": True,
+        "submit_disabled": True,
+        "loading_marker": "",
+        "aria_busy": False,
+        "fingerprint_hash": "sha256:stable",
+    }
+    value.update(overrides)
+    return value
+
+
+def panel_sequence(*samples):
+    calls = []
+
+    async def check(_page):
+        index = min(len(calls), len(samples) - 1)
+        calls.append(index)
+        return dict(samples[index])
+
+    check.calls = calls
+    return check
+
+
+async def stable_panel(_page):
+    return panel_sample()
+
+
+class FakeScopedNode:
+    def __init__(
+        self,
+        *,
+        a11y="",
+        attributes=None,
+        disabled=False,
+        editable=True,
+        visible=True,
+    ):
+        self.a11y = a11y
+        self.attributes = attributes or {}
+        self.disabled = disabled
+        self.editable = editable
+        self.visible = visible
+        self.aria_error = None
+        self.aria_calls = 0
+        self.editable_calls = 0
+
+    async def is_visible(self):
+        return self.visible
+
+    async def aria_snapshot(self):
+        self.aria_calls += 1
+        if self.aria_error is not None:
+            raise self.aria_error
+        return self.a11y
+
+    async def get_attribute(self, name):
+        return self.attributes.get(name)
+
+    async def is_disabled(self):
+        return self.disabled
+
+    async def is_editable(self):
+        self.editable_calls += 1
+        return self.editable
+
+
+class FakeScopedLocator:
+    def __init__(self, nodes=()):
+        self.nodes = list(nodes)
+
+    async def count(self):
+        return len(self.nodes)
+
+    def nth(self, index):
+        return self.nodes[index]
+
+
+class FakePanel:
+    def __init__(self):
+        self.visible_markers = set()
+        self.marker_counts = {}
+        self.aria_busy = False
+        self.input = FakeScopedNode(
+            attributes={"data-e2e": "comment-input"}
+        )
+        self.textbox = FakeScopedNode(
+            a11y='- textbox "Add comment"',
+            attributes={
+                "aria-label": "Add comment",
+                "contenteditable": "true",
+            },
+        )
+        self.submit = FakeScopedNode(
+            a11y='- button "Post" [disabled]',
+            attributes={
+                "aria-label": "Post",
+                "data-e2e": "comment-post",
+            },
+            disabled=True,
+        )
+        self.comments = []
+
+    def locator(self, selector):
+        if selector == '[data-e2e="comment-input"]':
+            return FakeScopedLocator([self.input])
+        if selector == '[data-e2e="comment-post"]':
+            return FakeScopedLocator([self.submit])
+        if "textarea" in selector:
+            return FakeScopedLocator([self.textbox])
+        count = self.marker_counts.get(
+            selector,
+            int(selector in self.visible_markers),
+        )
+        visible = selector in self.visible_markers
+        return FakeScopedLocator(
+            FakeScopedNode(visible=visible) for _ in range(count)
+        )
+
+    async def get_attribute(self, name):
+        return {
+            "role": "region",
+            "aria-busy": "true" if self.aria_busy else "false",
+        }.get(name)
 
 
 def readiness(*, origin="https://www.tiktok.com", blocked=False, skeleton_timed_out=False):
@@ -379,6 +529,8 @@ def test_open_comment_panel_resolves_entry_clicks_once_and_verifies_state():
             readiness_check=readiness(),
             element_resolver=resolver,
             scope_resolver=panel_scope,
+            panel_readiness_check=stable_panel,
+            sleep_fn=no_sleep,
         )
         await runner.ensure_state(page, "feed_ready", {})
         result = await runner.ensure_state(
@@ -409,6 +561,8 @@ def test_comment_panel_accepts_only_valid_run_local_entry_override():
             readiness_check=readiness(),
             element_resolver=resolver,
             scope_resolver=panel_scope,
+            panel_readiness_check=stable_panel,
+            sleep_fn=no_sleep,
         )
         await runner.ensure_state(page, "feed_ready", {})
         await runner.ensure_state(
@@ -440,24 +594,22 @@ def test_open_polls_delayed_panel_without_repeating_click():
         async def resolver(_page, _alias, _definition):
             return SimpleNamespace(locator=locator, candidate={"id": "comment-entry"})
 
-        async def delayed_panel(_page, scope):
+        async def delayed_panel(_page):
             nonlocal checks
-            assert scope == "visible_comment_panel"
             checks += 1
-            if checks >= 3:
-                return SimpleNamespace(), {"scope_target": scope}
-            raise LocatorResolutionError(
-                "element_scope_not_found",
-                "",
-                scope,
-                {},
+            return panel_sample(
+                panel_visible=checks >= 3,
+                fingerprint_hash=(
+                    "sha256:stable" if checks >= 3 else ""
+                ),
             )
 
         runner = ProbeStateRunner(
             target_url="https://www.tiktok.com/",
             readiness_check=readiness(),
             element_resolver=resolver,
-            scope_resolver=delayed_panel,
+            scope_resolver=panel_scope,
+            panel_readiness_check=delayed_panel,
             panel_timeout_seconds=0.2,
             poll_interval_seconds=0.01,
             sleep_fn=no_sleep,
@@ -471,12 +623,12 @@ def test_open_polls_delayed_panel_without_repeating_click():
         )
         assert result["state"] == "comment_panel_open"
         assert locator.click_count == 1
-        assert checks == 3
+        assert checks == 5
 
     asyncio.run(scenario())
 
 
-def test_open_detects_panel_retained_after_reload_without_toggling_it_closed():
+def test_shell_fallback_detects_retained_panel_without_clicking():
     async def scenario():
         page = FakePage()
         locator = FakeClickLocator(page)
@@ -492,9 +644,11 @@ def test_open_detects_panel_retained_after_reload_without_toggling_it_closed():
             readiness_check=readiness(),
             element_resolver=resolver,
             scope_resolver=panel_scope,
+            panel_readiness_check=stable_panel,
+            sleep_fn=no_sleep,
         )
         await runner.ensure_state(page, "feed_ready", {})
-        page.panel_open = True
+        page.shell_visible = True
 
         result = await runner.ensure_state(
             page,
@@ -506,40 +660,481 @@ def test_open_detects_panel_retained_after_reload_without_toggling_it_closed():
             "state": "comment_panel_open",
             "clicked": False,
             "panel_visible": True,
+            "stable_samples": 3,
+            "required_samples": 3,
+            "fingerprint_hash": "sha256:stable",
         }
         assert locator.click_count == 0
 
     asyncio.run(scenario())
 
 
-def test_open_failure_never_retries_dispatched_click():
-    async def scenario():
-        page = FakePage()
-        locator = FakeClickLocator(page)
+def test_expanded_entry_prevents_click_when_only_skeleton_is_visible():
+    class SkeletonPage(FakePage):
+        def __init__(self):
+            super().__init__()
+            self.seen_selectors = []
 
-        async def resolver(_page, _alias, _definition):
-            return SimpleNamespace(locator=locator, candidate={"id": "comment-entry"})
+        def locator(self, selector):
+            self.seen_selectors.append(selector)
+            return FakeVisibilityLocator(
+                [selector == '[class*="skeleton" i]']
+            )
+
+    async def scenario():
+        page = SkeletonPage()
+        locator = FakeClickLocator(page, aria_expanded="true")
+        samples = panel_sequence(
+            panel_sample(
+                loading_marker='[class*="skeleton" i]',
+                fingerprint_hash="",
+            ),
+            panel_sample(),
+            panel_sample(),
+            panel_sample(),
+        )
+
+        async def resolver(*_args):
+            return SimpleNamespace(locator=locator)
 
         runner = ProbeStateRunner(
             target_url="https://www.tiktok.com/",
             readiness_check=readiness(),
             element_resolver=resolver,
             scope_resolver=panel_scope,
-            panel_timeout_seconds=0.02,
-            poll_interval_seconds=0.01,
+            panel_readiness_check=samples,
             sleep_fn=no_sleep,
-            monotonic_fn=StepClock(),
+        )
+        await runner.ensure_state(page, "feed_ready", {})
+        result = await runner.ensure_state(
+            page,
+            "comment_panel_open",
+            {runner.comment_entry_alias: entry_definition()},
+        )
+
+        assert result["state"] == "comment_panel_open"
+        assert locator.click_count == 0
+        assert (
+            state_runner_module._COMMENT_PANEL_SHELL_SELECTOR
+            in page.seen_selectors
+        )
+        assert await page.locator(
+            '[class*="skeleton" i]'
+        ).first.is_visible()
+
+    asyncio.run(scenario())
+
+
+def test_comment_panel_requires_three_identical_eligible_samples():
+    async def scenario():
+        page = FakePage()
+        locator = FakeClickLocator(page, opens=True)
+        samples = panel_sequence(
+            panel_sample(fingerprint_hash="sha256:a"),
+            panel_sample(fingerprint_hash="sha256:b"),
+            panel_sample(fingerprint_hash="sha256:b"),
+            panel_sample(fingerprint_hash="sha256:b"),
+        )
+
+        async def resolver(*_args):
+            return SimpleNamespace(locator=locator, candidate={"id": "entry"})
+
+        runner = ProbeStateRunner(
+            target_url="https://www.tiktok.com/",
+            readiness_check=readiness(),
+            element_resolver=resolver,
+            scope_resolver=panel_scope,
+            panel_readiness_check=samples,
+            comment_readiness_timeout_seconds=60,
+            comment_readiness_poll_interval_seconds=2,
+            sleep_fn=no_sleep,
+            monotonic_fn=StepClock(step=1),
+        )
+        await runner.ensure_state(page, "feed_ready", {})
+        result = await runner.ensure_state(
+            page,
+            "comment_panel_open",
+            {runner.comment_entry_alias: entry_definition()},
+        )
+
+        assert result["state"] == "comment_panel_open"
+        assert result["stable_samples"] == 3
+        assert result["fingerprint_hash"] == "sha256:b"
+        assert len(samples.calls) == 4
+        assert locator.click_count == 1
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("sequence", "timeout", "code"),
+    [
+        (
+            (
+                panel_sample(
+                    loading_marker='[role="progressbar"]',
+                    fingerprint_hash="",
+                ),
+            ),
+            2,
+            "comment_panel_readiness_timeout",
+        ),
+        (
+            tuple(
+                panel_sample(fingerprint_hash=f"sha256:{value}")
+                for value in ("a", "b", "c")
+            ),
+            3,
+            "comment_panel_snapshot_unstable",
+        ),
+        (
+            (
+                panel_sample(
+                    submit_visible=False,
+                    fingerprint_hash="sha256:missing",
+                ),
+            ),
+            60,
+            "comment_panel_element_missing",
+        ),
+    ],
+)
+def test_comment_panel_rejects_loading_unstable_or_missing_controls(
+    sequence,
+    timeout,
+    code,
+):
+    async def scenario():
+        page = FakePage()
+        locator = FakeClickLocator(page, opens=True)
+        samples = panel_sequence(*sequence)
+
+        async def resolver(*_args):
+            return SimpleNamespace(locator=locator, candidate={"id": "entry"})
+
+        runner = ProbeStateRunner(
+            target_url="https://www.tiktok.com/",
+            readiness_check=readiness(),
+            element_resolver=resolver,
+            scope_resolver=panel_scope,
+            panel_readiness_check=samples,
+            comment_readiness_timeout_seconds=timeout,
+            comment_readiness_poll_interval_seconds=2,
+            sleep_fn=no_sleep,
+            monotonic_fn=StepClock(step=1),
         )
         await runner.ensure_state(page, "feed_ready", {})
         with pytest.raises(ProbeSafetyError) as caught:
             await runner.ensure_state(
                 page,
                 "comment_panel_open",
-                {"评论入口": entry_definition()},
+                {runner.comment_entry_alias: entry_definition()},
             )
-        assert caught.value.code == "probe_state_verification_failed"
-        assert locator.click_count == 1
+
+        assert caught.value.code == code
         assert runner.current_state == "feed_ready"
+        assert locator.click_count == 1
+
+    asyncio.run(scenario())
+
+
+def test_scoped_panel_sample_ignores_old_panel_and_dynamic_comments():
+    async def scenario():
+        panel, old_panel = FakePanel(), FakePanel()
+
+        async def scope(_page, _scope):
+            return panel, {}
+
+        runner = ProbeStateRunner(
+            target_url="https://www.tiktok.com/",
+            scope_resolver=scope,
+        )
+        page = SimpleNamespace(old_panel=old_panel)
+
+        panel.aria_busy = True
+        busy = await runner._comment_panel_readiness_sample(page)
+        panel.aria_busy = False
+        panel.visible_markers.add('[class*="spinner" i]')
+        loading = await runner._comment_panel_readiness_sample(page)
+        panel.visible_markers.clear()
+        assert busy["aria_busy"] is True
+        assert busy["fingerprint_hash"] == ""
+        assert panel.textbox.editable_calls == 0
+        overflow_selector = '[data-e2e*="loading" i]'
+        panel.marker_counts[overflow_selector] = 21
+        overflow = await runner._comment_panel_readiness_sample(page)
+        panel.marker_counts.clear()
+        before = await runner._comment_panel_readiness_sample(page)
+        panel.comments.append("new dynamic comment")
+        old_panel.textbox.a11y = '- textbox "Changed old panel"'
+        after = await runner._comment_panel_readiness_sample(page)
+
+        assert loading["loading_marker"] == '[class*="spinner" i]'
+        assert loading["fingerprint_hash"] == ""
+        assert panel.textbox.aria_calls == 3
+        assert panel.textbox.editable_calls == 3
+        assert panel.submit.aria_calls == 3
+        assert overflow["loading_marker"] == ""
+        assert overflow["input_visible"] is True
+        assert before["textbox_visible"] is True
+        assert before["submit_visible"] is True
+        assert before["submit_disabled"] is True
+        assert after["fingerprint_hash"] == before["fingerprint_hash"]
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    "self_selector",
+    [
+        'textarea[data-e2e="comment-input"]',
+        '[data-e2e="comment-input"][role="textbox"]',
+    ],
+)
+def test_scoped_textbox_selector_supports_self_controls(self_selector):
+    class VariantPanel(FakePanel):
+        def locator(self, selector):
+            if selector == state_runner_module._COMMENT_TEXTBOX_SELECTOR:
+                return FakeScopedLocator(
+                    [self.textbox] if self_selector in selector else []
+                )
+            return super().locator(selector)
+
+    async def scenario():
+        panel = VariantPanel()
+
+        async def scope(_page, _scope):
+            return panel, {}
+
+        runner = ProbeStateRunner(
+            target_url="https://www.tiktok.com/",
+            scope_resolver=scope,
+        )
+        sample = await runner._comment_panel_readiness_sample(object())
+
+        assert sample["textbox_visible"] is True
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("self_selector", "blocked_attribute"),
+    [
+        ('textarea[data-e2e="comment-input"]', "readonly"),
+        ('textarea[data-e2e="comment-input"]', "disabled"),
+        (
+            'input[data-e2e="comment-input"]:not([type="hidden"])',
+            "readonly",
+        ),
+        (
+            'input[data-e2e="comment-input"]:not([type="hidden"])',
+            "disabled",
+        ),
+    ],
+)
+def test_readonly_or_disabled_native_textbox_is_not_ready(
+    self_selector,
+    blocked_attribute,
+):
+    class VariantPanel(FakePanel):
+        def locator(self, selector):
+            if selector == state_runner_module._COMMENT_TEXTBOX_SELECTOR:
+                return FakeScopedLocator(
+                    [self.textbox] if self_selector in selector else []
+                )
+            return super().locator(selector)
+
+    async def scenario():
+        panel = VariantPanel()
+        panel.textbox.editable = False
+        panel.textbox.attributes[blocked_attribute] = ""
+
+        async def scope(_page, _scope):
+            return panel, {}
+
+        runner = ProbeStateRunner(
+            target_url="https://www.tiktok.com/",
+            scope_resolver=scope,
+        )
+        sample = await runner._comment_panel_readiness_sample(object())
+
+        assert sample["textbox_visible"] is False
+        assert panel.textbox.editable_calls == 1
+
+    asyncio.run(scenario())
+
+
+def test_textbox_editable_state_changes_fingerprint():
+    async def scenario():
+        panel = FakePanel()
+
+        async def scope(_page, _scope):
+            return panel, {}
+
+        runner = ProbeStateRunner(
+            target_url="https://www.tiktok.com/",
+            scope_resolver=scope,
+        )
+        editable = await runner._comment_panel_readiness_sample(object())
+        panel.textbox.editable = False
+        readonly = await runner._comment_panel_readiness_sample(object())
+
+        assert editable["textbox_visible"] is True
+        assert readonly["textbox_visible"] is False
+        assert readonly["fingerprint_hash"] != editable["fingerprint_hash"]
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("control", "a11y"),
+    [
+        ("textbox", ""),
+        ("textbox", '- generic "Comment"'),
+        ("submit", '- text "Post"'),
+    ],
+)
+def test_invalid_scoped_a11y_role_never_passes_readiness(control, a11y):
+    async def scenario():
+        panel = FakePanel()
+        getattr(panel, control).a11y = a11y
+
+        async def scope(_page, _scope):
+            return panel, {}
+
+        runner = ProbeStateRunner(
+            target_url="https://www.tiktok.com/",
+            scope_resolver=scope,
+            sleep_fn=no_sleep,
+            monotonic_fn=StepClock(step=1),
+        )
+        with pytest.raises(ProbeSafetyError) as caught:
+            await runner._wait_for_comment_panel_ready(object())
+
+        assert caught.value.code == "comment_panel_element_missing"
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("parent_cancel", [False, True])
+def test_wait_does_not_block_on_sampler_cleanup(parent_cancel):
+    async def scenario():
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def delays_cleanup(_page):
+            started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                await release.wait()
+                return panel_sample()
+
+        runner = ProbeStateRunner(
+            target_url="https://www.tiktok.com/",
+            panel_readiness_check=delays_cleanup,
+            comment_readiness_timeout_seconds=(
+                60 if parent_cancel else 0.01
+            ),
+        )
+        waiting = asyncio.create_task(
+            runner._wait_for_comment_panel_ready(object())
+        )
+        await started.wait()
+        if parent_cancel:
+            waiting.cancel()
+        started_at = asyncio.get_running_loop().time()
+        expected = asyncio.CancelledError if parent_cancel else ProbeSafetyError
+        with pytest.raises(expected) as caught:
+            await waiting
+        assert asyncio.get_running_loop().time() - started_at < 0.1
+        if not parent_cancel:
+            assert caught.value.code == "probe_panel_check_failed"
+        with pytest.raises(ProbeSafetyError) as poisoned:
+            await runner._wait_for_comment_panel_ready(object())
+        assert poisoned.value.code == "probe_panel_check_failed"
+        release.set()
+        await asyncio.sleep(0)
+
+    asyncio.run(scenario())
+
+
+def test_sampler_cleanup_error_does_not_replace_timeout():
+    async def scenario():
+        contexts = []
+        loop = asyncio.get_running_loop()
+        loop.set_exception_handler(
+            lambda _loop, context: contexts.append(context)
+        )
+
+        async def fails_cleanup(_page):
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                raise RuntimeError("cleanup failed")
+
+        runner = ProbeStateRunner(
+            target_url="https://www.tiktok.com/",
+            panel_readiness_check=fails_cleanup,
+            comment_readiness_timeout_seconds=0.01,
+        )
+        with pytest.raises(ProbeSafetyError) as caught:
+            await runner._wait_for_comment_panel_ready(object())
+        await asyncio.sleep(0)
+
+        assert caught.value.code == "probe_panel_check_failed"
+        assert contexts == []
+
+    asyncio.run(scenario())
+
+
+def test_production_panel_sample_error_is_preserved():
+    async def scenario():
+        panel = FakePanel()
+        panel.textbox.aria_error = RuntimeError("aria unavailable")
+
+        async def scope(_page, _scope):
+            return panel, {}
+
+        runner = ProbeStateRunner(
+            target_url="https://www.tiktok.com/",
+            scope_resolver=scope,
+        )
+        with pytest.raises(ProbeSafetyError) as caught:
+            await runner._wait_for_comment_panel_ready(object())
+
+        assert caught.value.code == "probe_panel_check_failed"
+        assert caught.value.action == "verify_comment_panel"
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        TimeoutError(),
+        ProbeSafetyError(
+            "probe_origin_mismatch",
+            "verify_comment_panel",
+        ),
+    ],
+)
+def test_sampler_errors_preserve_safety_classification(error):
+    async def scenario():
+        async def fails(_page):
+            raise error
+
+        runner = ProbeStateRunner(
+            target_url="https://www.tiktok.com/",
+            panel_readiness_check=fails,
+        )
+        with pytest.raises(ProbeSafetyError) as caught:
+            await runner._wait_for_comment_panel_ready(object())
+
+        if isinstance(error, ProbeSafetyError):
+            assert caught.value is error
+        else:
+            assert caught.value.code == "probe_panel_check_failed"
 
     asyncio.run(scenario())
 

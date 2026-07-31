@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import time
+from collections.abc import Mapping
 from typing import Any, Awaitable, Callable
 from urllib.parse import urlsplit
 
@@ -63,6 +66,34 @@ _SKELETON_MARKERS = (
     '[class*="skeleton" i]',
     '[aria-busy="true"]',
 )
+_COMMENT_PANEL_LOADING_MARKERS = (
+    '[data-e2e*="skeleton" i]',
+    '[class*="skeleton" i]',
+    '[data-e2e*="loading" i]',
+    '[data-e2e*="spinner" i]',
+    '[class*="spinner" i]',
+    '[role="progressbar"]',
+    '[aria-busy="true"]',
+)
+_COMMENT_PANEL_SHELL_SELECTOR = (
+    'section:has([data-e2e="comment-input"]), '
+    'section:has([data-e2e="comment-post"]), '
+    'section:has([data-e2e*="comment-list" i]), '
+    '[role="dialog"]:has([data-e2e*="comment" i])'
+)
+_COMMENT_PANEL_STABLE_SAMPLES = 3
+_COMMENT_INPUT_SELECTOR = '[data-e2e="comment-input"]'
+_COMMENT_TEXTBOX_SELECTOR = (
+    'textarea[data-e2e="comment-input"], '
+    'input[data-e2e="comment-input"]:not([type="hidden"]), '
+    '[data-e2e="comment-input"][role="textbox"], '
+    '[data-e2e="comment-input"][contenteditable="true"], '
+    '[data-e2e="comment-input"] [contenteditable="true"], '
+    '[data-e2e="comment-input"] textarea, '
+    '[data-e2e="comment-input"] input:not([type="hidden"]), '
+    '[data-e2e="comment-input"] [role="textbox"]'
+)
+_COMMENT_SUBMIT_SELECTOR = '[data-e2e="comment-post"]'
 
 
 class ProbeSafetyError(RuntimeError):
@@ -73,6 +104,7 @@ class ProbeSafetyError(RuntimeError):
 
 
 ReadinessCheck = Callable[[Any], Awaitable[dict]]
+PanelReadinessCheck = Callable[[Any], Awaitable[dict]]
 ElementResolver = Callable[[Any, str, dict], Awaitable[Any]]
 ScopeResolver = Callable[[Any, str], Awaitable[tuple[Any, dict]]]
 SleepFn = Callable[[float], Awaitable[None]]
@@ -91,6 +123,9 @@ class ProbeStateRunner:
         comment_close_alias: str | None = None,
         readiness_timeout_ms: int = 60_000,
         readiness_poll_interval_seconds: float = 1.0,
+        panel_readiness_check: PanelReadinessCheck | None = None,
+        comment_readiness_timeout_seconds: float = 60.0,
+        comment_readiness_poll_interval_seconds: float = 2.0,
         panel_timeout_seconds: float = 15.0,
         poll_interval_seconds: float = 0.25,
         max_skeleton_nodes: int = 100,
@@ -115,6 +150,8 @@ class ProbeStateRunner:
             panel_timeout_seconds <= 0
             or poll_interval_seconds <= 0
             or readiness_poll_interval_seconds <= 0
+            or comment_readiness_timeout_seconds <= 0
+            or comment_readiness_poll_interval_seconds <= 0
         ):
             raise ValueError("polling timeouts must be positive")
         if max_skeleton_nodes < 1:
@@ -132,6 +169,15 @@ class ProbeStateRunner:
         self.readiness_poll_interval_seconds = (
             readiness_poll_interval_seconds
         )
+        self.panel_readiness_check = (
+            panel_readiness_check or self._comment_panel_readiness_sample
+        )
+        self.comment_readiness_timeout_seconds = (
+            comment_readiness_timeout_seconds
+        )
+        self.comment_readiness_poll_interval_seconds = (
+            comment_readiness_poll_interval_seconds
+        )
         self.panel_timeout_seconds = panel_timeout_seconds
         self.poll_interval_seconds = poll_interval_seconds
         self.max_skeleton_nodes = max_skeleton_nodes
@@ -140,6 +186,7 @@ class ProbeStateRunner:
         self.sleep_fn = sleep_fn
         self.monotonic_fn = monotonic_fn
         self.current_state: str | None = None
+        self._panel_sampler_poisoned = False
 
     async def ensure_state(
         self,
@@ -194,27 +241,30 @@ class ProbeStateRunner:
                 await self.ensure_state(page, "feed_ready", selected)
             if self.current_state == "comment_panel_open":
                 await self._require_safe_origin(page, "open_comment_panel")
-                if not await self._panel_visible(page):
-                    raise ProbeSafetyError(
-                        "probe_state_verification_failed",
-                        "open_comment_panel",
-                    )
+                readiness = await self._wait_for_comment_panel_ready(page)
                 return {
                     "state": "comment_panel_open",
                     "clicked": False,
                     "panel_visible": True,
+                    "stable_samples": readiness["stable_samples"],
+                    "required_samples": readiness["required_samples"],
+                    "fingerprint_hash": readiness["fingerprint_hash"],
                 }
             if self.current_state not in {"feed_ready", "comment_panel_closed"}:
                 raise ProbeSafetyError(
                     "probe_transition_forbidden",
                     "open_comment_panel",
                 )
-            if await self._panel_visible(page):
+            if await self._visible_panel_locator(page) is not None:
+                readiness = await self._wait_for_comment_panel_ready(page)
                 self.current_state = "comment_panel_open"
                 return {
                     "state": "comment_panel_open",
                     "clicked": False,
                     "panel_visible": True,
+                    "stable_samples": readiness["stable_samples"],
+                    "required_samples": readiness["required_samples"],
+                    "fingerprint_hash": readiness["fingerprint_hash"],
                 }
             return await self.dispatch(
                 page,
@@ -453,13 +503,24 @@ class ProbeStateRunner:
             self.comment_entry_alias,
             definition,
         )
+        if (
+            await resolved.locator.get_attribute("aria-expanded")
+            == "true"
+        ):
+            readiness = await self._wait_for_comment_panel_ready(page)
+            self.current_state = "comment_panel_open"
+            return {
+                "state": self.current_state,
+                "clicked": False,
+                "alias": self.comment_entry_alias,
+                "panel_visible": True,
+                "stable_samples": readiness["stable_samples"],
+                "required_samples": readiness["required_samples"],
+                "fingerprint_hash": readiness["fingerprint_hash"],
+            }
         await resolved.locator.click()
         await self._require_safe_origin(page, "open_comment_panel")
-        if not await self._wait_for_panel_state(page, visible=True):
-            raise ProbeSafetyError(
-                "probe_state_verification_failed",
-                "open_comment_panel",
-            )
+        readiness = await self._wait_for_comment_panel_ready(page)
 
         self.current_state = "comment_panel_open"
         return {
@@ -467,7 +528,311 @@ class ProbeStateRunner:
             "clicked": True,
             "alias": self.comment_entry_alias,
             "panel_visible": True,
+            "stable_samples": readiness["stable_samples"],
+            "required_samples": readiness["required_samples"],
+            "fingerprint_hash": readiness["fingerprint_hash"],
         }
+
+    @staticmethod
+    def _hash_panel_controls(value: Mapping[str, object]) -> str:
+        fields = (
+            "panel_role",
+            "aria_busy",
+            "input_count",
+            "input_a11y",
+            "input_data_e2e",
+            "input_aria_label",
+            "contenteditable",
+            "textbox_editable",
+            "submit_count",
+            "submit_a11y",
+            "submit_data_e2e",
+            "submit_aria_label",
+            "submit_disabled",
+        )
+        encoded = json.dumps(
+            {key: value.get(key) for key in fields},
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        return "sha256:" + hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    async def _unique_visible(locator: Any) -> tuple[int, Any | None]:
+        selected = None
+        visible = 0
+        count = await locator.count()
+        if count > 20:
+            return 2, None
+        for index in range(count):
+            candidate = locator.nth(index)
+            if await candidate.is_visible():
+                visible += 1
+                selected = candidate
+        return visible, selected if visible == 1 else None
+
+    async def _visible_panel_locator(self, page: Any) -> Any | None:
+        try:
+            locator, _diagnostics = await self.scope_resolver(
+                page,
+                "visible_comment_panel",
+            )
+            return locator
+        except LocatorResolutionError as error:
+            if error.code != "element_scope_not_found":
+                raise ProbeSafetyError(
+                    "probe_panel_check_failed",
+                    "verify_comment_panel",
+                ) from None
+
+        shells = page.locator(_COMMENT_PANEL_SHELL_SELECTOR)
+        visible = []
+        for index in range(min(await shells.count(), 10)):
+            candidate = shells.nth(index)
+            if await candidate.is_visible():
+                visible.append(candidate)
+        return visible[0] if len(visible) == 1 else None
+
+    async def _comment_panel_readiness_sample(self, page: Any) -> dict:
+        panel = await self._visible_panel_locator(page)
+        if panel is None:
+            return {
+                "panel_visible": False,
+                "input_visible": False,
+                "textbox_visible": False,
+                "submit_visible": False,
+                "submit_disabled": False,
+                "loading_marker": "",
+                "aria_busy": False,
+                "fingerprint_hash": "",
+            }
+
+        aria_busy = (await panel.get_attribute("aria-busy")) == "true"
+        loading_marker = ""
+        for selector in _COMMENT_PANEL_LOADING_MARKERS:
+            markers = panel.locator(selector)
+            marker_count = await markers.count()
+            for index in range(marker_count):
+                if await markers.nth(index).is_visible():
+                    loading_marker = selector
+                    break
+            if loading_marker:
+                break
+        if loading_marker or aria_busy:
+            return {
+                "panel_visible": True,
+                "input_visible": False,
+                "textbox_visible": False,
+                "submit_visible": False,
+                "submit_disabled": False,
+                "loading_marker": loading_marker,
+                "aria_busy": aria_busy,
+                "fingerprint_hash": "",
+            }
+
+        input_count, input_container = await self._unique_visible(
+            panel.locator(_COMMENT_INPUT_SELECTOR)
+        )
+        textbox_count, textbox = await self._unique_visible(
+            panel.locator(_COMMENT_TEXTBOX_SELECTOR)
+        )
+        submit_count, submit = await self._unique_visible(
+            panel.locator(_COMMENT_SUBMIT_SELECTOR)
+        )
+
+        async def a11y_text(
+            locator: Any | None,
+            expected_role: str,
+        ) -> str:
+            if locator is None:
+                return ""
+            value = await locator.aria_snapshot()
+            if not isinstance(value, str):
+                return ""
+            bounded = value.strip()[:512]
+            first = next(
+                (
+                    line.strip()
+                    for line in bounded.splitlines()
+                    if line.strip()
+                ),
+                "",
+            )
+            prefix = f"- {expected_role}"
+            return (
+                bounded
+                if first == prefix or first.startswith(prefix + " ")
+                else ""
+            )
+
+        async def attribute(locator: Any | None, name: str) -> str:
+            if locator is None:
+                return ""
+            value = await locator.get_attribute(name)
+            return value.strip()[:160] if isinstance(value, str) else ""
+
+        input_a11y = await a11y_text(textbox, "textbox")
+        submit_a11y = await a11y_text(submit, "button")
+        textbox_editable = (
+            await textbox.is_editable()
+            if textbox is not None
+            else False
+        )
+        panel_role = str(await panel.get_attribute("role") or "")[:160]
+        semantic = {
+            "panel_role": panel_role,
+            "aria_busy": aria_busy,
+            "input_count": input_count,
+            "input_a11y": input_a11y,
+            "input_data_e2e": await attribute(
+                input_container,
+                "data-e2e",
+            ),
+            "input_aria_label": await attribute(textbox, "aria-label"),
+            "contenteditable": await attribute(
+                textbox,
+                "contenteditable",
+            ),
+            "textbox_editable": textbox_editable,
+            "submit_count": submit_count,
+            "submit_a11y": submit_a11y,
+            "submit_data_e2e": await attribute(submit, "data-e2e"),
+            "submit_aria_label": await attribute(submit, "aria-label"),
+            "submit_disabled": (
+                await submit.is_disabled()
+                if submit is not None
+                else False
+            ),
+        }
+        return {
+            "panel_visible": True,
+            "input_visible": input_count == 1,
+            "textbox_visible": (
+                textbox_count == 1
+                and bool(input_a11y)
+                and textbox_editable
+            ),
+            "submit_visible": submit_count == 1 and bool(submit_a11y),
+            "submit_disabled": semantic["submit_disabled"],
+            "loading_marker": loading_marker,
+            "aria_busy": aria_busy,
+            "fingerprint_hash": self._hash_panel_controls(semantic),
+        }
+
+    async def _wait_for_comment_panel_ready(self, page: Any) -> dict:
+        if self._panel_sampler_poisoned:
+            raise ProbeSafetyError(
+                "probe_panel_check_failed",
+                "verify_comment_panel",
+            )
+        deadline = (
+            self.monotonic_fn()
+            + self.comment_readiness_timeout_seconds
+        )
+        previous = ""
+        stable = 0
+        saw_eligible = False
+
+        def timeout_error() -> ProbeSafetyError:
+            return ProbeSafetyError(
+                (
+                    "comment_panel_snapshot_unstable"
+                    if saw_eligible
+                    else "comment_panel_readiness_timeout"
+                ),
+                "open_comment_panel",
+            )
+
+        def consume_cancelled_task(done: asyncio.Task) -> None:
+            try:
+                done.result()
+            except BaseException:
+                pass
+
+        while True:
+            remaining = deadline - self.monotonic_fn()
+            if remaining <= 0:
+                raise timeout_error()
+            task = asyncio.create_task(
+                self.panel_readiness_check(page)
+            )
+            try:
+                done, _pending = await asyncio.wait(
+                    {task},
+                    timeout=remaining,
+                )
+                if not done:
+                    self._panel_sampler_poisoned = True
+                    task.cancel()
+                    task.add_done_callback(consume_cancelled_task)
+                    raise ProbeSafetyError(
+                        "probe_panel_check_failed",
+                        "verify_comment_panel",
+                    )
+                sample = task.result()
+            except asyncio.CancelledError:
+                self._panel_sampler_poisoned = True
+                task.cancel()
+                task.add_done_callback(consume_cancelled_task)
+                raise
+            except ProbeSafetyError:
+                raise
+            except Exception:
+                raise ProbeSafetyError(
+                    "probe_panel_check_failed",
+                    "verify_comment_panel",
+                ) from None
+            if self.monotonic_fn() >= deadline:
+                raise timeout_error()
+            if not isinstance(sample, Mapping):
+                raise ProbeSafetyError(
+                    "probe_panel_check_failed",
+                    "verify_comment_panel",
+                )
+
+            eligible = (
+                sample.get("panel_visible") is True
+                and not sample.get("loading_marker")
+                and sample.get("aria_busy") is False
+            )
+            fingerprint = str(sample.get("fingerprint_hash") or "")
+            if eligible and fingerprint:
+                saw_eligible = True
+                stable = stable + 1 if fingerprint == previous else 1
+                previous = fingerprint
+                if stable >= _COMMENT_PANEL_STABLE_SAMPLES:
+                    if not all(
+                        sample.get(key) is True
+                        for key in (
+                            "input_visible",
+                            "textbox_visible",
+                            "submit_visible",
+                        )
+                    ):
+                        raise ProbeSafetyError(
+                            "comment_panel_element_missing",
+                            "open_comment_panel",
+                        )
+                    return {
+                        **sample,
+                        "stable_samples": stable,
+                        "required_samples": _COMMENT_PANEL_STABLE_SAMPLES,
+                    }
+            else:
+                previous = ""
+                stable = 0
+
+            remaining = deadline - self.monotonic_fn()
+            if remaining <= 0:
+                raise timeout_error()
+            await self.sleep_fn(
+                min(
+                    self.comment_readiness_poll_interval_seconds,
+                    remaining,
+                )
+            )
 
     async def _close_comment_panel(
         self,
