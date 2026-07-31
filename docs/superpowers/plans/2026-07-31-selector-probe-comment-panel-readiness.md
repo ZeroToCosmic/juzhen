@@ -1,5 +1,9 @@
 # Selector Probe Comment Panel Readiness Implementation Plan
 
+> **Superseded:** The user selected the core minimal design after this plan was
+> written. Do not execute this plan. Replace it after the revised design spec is
+> approved.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Prevent selector capture while TikTok's comment panel is still loading, retain actionable failure evidence, and pause only comment-dependent strategies after three failed readiness attempts.
