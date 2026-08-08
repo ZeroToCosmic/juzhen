@@ -686,3 +686,53 @@ def _normalize_proxy_pool(settings: dict) -> None:
         proxy_pool["items"] = items
     else:
         proxy_pool["raw"] = format_proxy_pool(items)
+
+
+def public_settings(settings: dict) -> dict:
+    """Return settings safe to place in API responses and the browser DOM."""
+
+    public = copy.deepcopy(settings)
+    public["_secrets_configured"] = {
+        "proxy": {
+            "password": bool(settings.get("proxy", {}).get("password")),
+        },
+        "proxy_pool": {
+            "raw": bool(settings.get("proxy_pool", {}).get("raw")),
+        },
+        "r2": {
+            key: bool(settings.get("r2", {}).get(key))
+            for key in ("account_token", "access_key_id", "secret_access_key")
+        },
+        "adspower": {
+            "api_key": bool(settings.get("adspower", {}).get("api_key")),
+        },
+        "models": {
+            "items": [
+                {"api_key": bool(item.get("api_key"))}
+                for item in settings.get("models", {}).get("items", [])
+                if isinstance(item, dict)
+            ],
+        },
+        "selector_probe": {
+            "webhook": {
+                "signing_secret": bool(
+                    settings.get("selector_probe", {})
+                    .get("webhook", {})
+                    .get("signing_secret")
+                ),
+            },
+        },
+    }
+    public.pop("selector_probe", None)
+    public.get("proxy", {})["password"] = ""
+    proxy_pool = public.get("proxy_pool", {})
+    proxy_pool["raw"] = ""
+    proxy_pool["items"] = []
+    r2 = public.get("r2", {})
+    for key in ("account_token", "access_key_id", "secret_access_key"):
+        r2[key] = ""
+    public.get("adspower", {})["api_key"] = ""
+    for item in public.get("models", {}).get("items", []):
+        if isinstance(item, dict):
+            item["api_key"] = ""
+    return public
