@@ -5,20 +5,13 @@ const {
   buildElementQuery,
   canCreateElement,
   createSelectorProbeUI,
-  elementRequestStatusText,
   renderElementDirectory,
-  renderElementDetail,
   renderOverview,
-  renderValidationMatrix,
-  sanitizeElementDetail,
-  sanitizeProbeSuggestion,
+  sanitizePickerSession,
   sanitizeStructuredLocators,
   selectOverviewElements,
   selectorProbeDependencies,
-  serializeSemanticContract,
   serializeElementFilters,
-  summarizeValidation,
-  migrationSafetyCopy,
 } = require("../gateway/static/selector_probe_ui");
 
 function response(data) {
@@ -331,27 +324,6 @@ test("directory renderer shows add control only to administrators", () => {
   }
 });
 
-test("basic wizard serializes semantic fields and no selector code", () => {
-  const payload = serializeSemanticContract({
-    displayName: "分享入口",
-    intent: "open current video share panel",
-    requiredState: "feed_ready",
-    scope: "active_video",
-    probeAction: "open_read_only",
-    xpath: "/html/body/button",
-    javascript: "alert(1)",
-  });
-
-  assert.deepEqual(Object.keys(payload).sort(), [
-    "display_name",
-    "intent",
-    "probe_action",
-    "required_state",
-    "scope",
-  ]);
-  assert.equal("xpath" in payload, false);
-  assert.equal("javascript" in payload, false);
-});
 
 test("readonly locator sanitizer rejects executable and absolute selectors", () => {
   assert.throws(
@@ -388,670 +360,143 @@ test("readonly locator sanitizer rejects executable and absolute selectors", () 
   );
 });
 
-test("validation matrix requires two masked profiles and two fresh rounds", () => {
-  const result = summarizeValidation([
-    {profile_mask: "***3A7F", round: 1, status: "passed"},
-    {profile_mask: "***3A7F", round: 2, status: "passed"},
-    {profile_mask: "***91C2", round: 1, status: "passed"},
-    {profile_mask: "***91C2", round: 2, status: "passed"},
-  ]);
 
-  assert.deepEqual(result, {profiles: 2, rounds: 2, publishable: true});
-  assert.equal(
-    summarizeValidation([
-      {profile_mask: "***3A7F", round: 1, status: "passed"},
-      {profile_mask: "***3A7F", round: 2, status: "passed"},
-      {profile_mask: "full-profile-id", round: 1, status: "passed"},
-      {profile_mask: "full-profile-id", round: 2, status: "passed"},
-    ]).publishable,
-    false,
-  );
-});
-
-test("detail renderer exposes four safe sections and a masked 2x2 matrix", () => {
-  const {document, nodes} = fakeDocument([
-    "selector-element-detail-title",
-    "selector-element-detail-alias",
-    "selector-element-detail-status",
-    "selector-element-detail-version",
-    "selector-element-detail-dependencies",
-    "selector-element-detail-last-validation",
-    "selector-element-detail-evidence",
-    "selector-element-detail-candidates",
-    "selector-element-detail-repairs",
-    "selector-element-detail-history",
-    "selector-element-validation-matrix",
-  ]);
-  const rounds = [
-    {profile_mask: "***3A7F", round: 1, status: "passed", match_count: 1},
-    {profile_mask: "***3A7F", round: 2, status: "passed", match_count: 1},
-    {profile_mask: "***91C2", round: 1, status: "passed", match_count: 1},
-    {profile_mask: "***91C2", round: 2, status: "passed", match_count: 1},
-  ];
-  const detail = sanitizeElementDetail({
-    id: "element-share",
-    display_name: "分享入口",
-    published_status: "healthy",
-    active_version: "sel-9",
-    dependency_count: 2,
-    last_validated_at: "2026-07-29T03:01:00+08:00",
-    evidence: {status: "passed", rounds},
-    candidates: [{id: "draft", type: "css", value: ".draft-only", enabled: true}],
-    candidate_comparison: {
-      active: [{id: "role", type: "role", role: "button", name: "Share", name_mode: "exact", enabled: true}],
-      deterministic: [{id: "attr", type: "attribute", name: "data-e2e", value: "share-icon", enabled: true}],
-      repaired: [{id: "css", type: "css", value: "button[data-e2e='share-icon']", enabled: true}],
-    },
-    repairs: Array.from({length: 4}, (_, index) => ({
-      attempt: index + 1,
-      previous_method: "role",
-      failure_code: "not_found",
-      new_method: "attribute",
-      validation_result: "passed",
-    })),
-    history: [{version_id: "sel-9", status: "published", published_at: "2026-07-29"}],
-    raw_dom: "never-render",
-  });
-
-  renderElementDetail(document, detail);
-  renderValidationMatrix(document, rounds);
-
-  assert.equal(nodes.get("selector-element-detail-title").textContent, "分享入口");
-  assert.equal(nodes.get("selector-element-detail-evidence").children.length, 1);
-  assert.equal(nodes.get("selector-element-detail-candidates").children.length, 3);
-  assert.equal(nodes.get("selector-element-detail-repairs").children.length, 3);
-  assert.equal(nodes.get("selector-element-detail-history").children.length, 1);
-  assert.equal(nodes.get("selector-element-validation-matrix").children.length, 4);
-  const encoded = JSON.stringify(
-    Array.from(nodes.values()).map((item) => item.textContent),
-  );
-  assert.doesNotMatch(encoded, /never-render/);
-});
-
-test("probe suggestion and detail drop all raw capture and model-output fields", () => {
-  const suggestion = sanitizeProbeSuggestion({
-    role: "button",
-    name: "Share",
-    stable_attributes: [{name: "data-e2e", value: "share-icon"}],
-    candidates: [{id: "role", type: "role", role: "button", name: "Share", name_mode: "exact", enabled: true}],
-    llm_used: true,
-    rejected_methods: [{method: "absolute_xpath", code: "unsafe_method"}],
-    raw_dom: "<button>secret</button>",
-    ax_tree: {secret: true},
-    prompt: "secret prompt",
-    model_output: "secret answer",
-  });
-  const detail = sanitizeElementDetail({
-    id: "element-share",
-    display_name: "分享入口",
-    evidence: {profile_mask: "***3A7F", raw_dom: "secret"},
-    candidates: suggestion.candidates,
-    candidate_comparison: {
-      active: suggestion.candidates,
-      deterministic: [],
-      repaired: [],
-    },
-    repairs: Array.from({length: 5}, (_, index) => ({
-      attempt: index + 1,
-      failure_code: "not_found",
-      prompt_version: "repair-v1",
-      model_id: "gpt-safe",
-      prompt: "secret",
-      model_output: "secret",
-    })),
-    raw_dom: "secret",
-    ax_tree: "secret",
-    prompt: "secret",
-    model_output: "secret",
-  });
-
-  assert.deepEqual(Object.keys(suggestion).sort(), [
-    "candidates",
-    "llm_used",
-    "name",
-    "rejected_methods",
-    "role",
-    "stable_attributes",
-    "warnings",
-  ]);
-  assert.equal(detail.repairs.length, 3);
-  const encoded = JSON.stringify({suggestion, detail});
-  assert.doesNotMatch(encoded, /raw_dom|ax_tree|secret prompt|secret answer|model_output/);
-});
-
-test("administrator wizard posts semantic draft then polls durable request detail", async () => {
+test("live collector names inventory selections and saves manual drafts", async () => {
   const requests = [];
-  const timers = [];
-  let requestPoll = 0;
-  const ui = createSelectorProbeUI({
-    requestJson: async (url, method, body) => {
-      requests.push({url, method, body});
-      if (url === "/api/auth/session") return response({role: "administrator"});
-      if (url.endsWith("/status")) return response({});
-      if (method === "POST" && url === "/api/selector-probe/elements") {
-        return {status: 201, data: {
-          id: "element-share",
-          display_name: "分享入口",
-          revision: 5,
-          draft_revision: 99,
-          candidates: [],
-        }};
-      }
-      if (method === "POST" && url.endsWith("/probe")) {
-        return {status: 202, data: {
-          request_id: "request-probe-1",
-          request_type: "probe",
-          element_id: "element-share",
-          expected_revision: 6,
-          status: "accepted",
-        }};
-      }
-      if (url === "/api/selector-probe/element-requests/request-probe-1") {
-        requestPoll += 1;
-        return response(requestPoll === 1
-          ? {request_id: "request-probe-1", request_type: "probe", status: "processing"}
-          : {
-            request_id: "request-probe-1",
-            request_type: "probe",
-            status: "completed",
-            result: {
-              suggestion: {
-                role: "button",
-                name: "Share",
-                stable_attributes: [{name: "data-e2e", value: "share-icon"}],
-                candidates: [],
-                llm_used: false,
-              },
-              raw_dom: "secret",
-            },
-          });
-      }
-      if (method === "GET" && url === "/api/selector-probe/elements/element-share") {
-        return response({
-          id: "element-share",
-          display_name: "分享入口",
-          revision: 7,
-          candidate_comparison: {
-            active: [],
-            deterministic: [],
-            repaired: [],
-          },
-          repairs: [],
-          history: [],
-        });
-      }
-      return response({});
-    },
-    setTimeout: (callback, milliseconds) => {
-      timers.push({callback, milliseconds});
-      return timers.length;
-    },
-    clearTimeout() {},
-    setInterval: () => 1,
-    clearInterval() {},
-    render() {},
-  });
-  await ui.init();
-
-  assert.equal(ui.openElementWizard(), true);
-  await ui.createElementDraft({
-    displayName: "分享入口",
-    intent: "open current video share panel",
-    requiredState: "feed_ready",
-    scope: "active_video",
-    probeAction: "open_read_only",
-  });
-  await ui.requestElementProbe();
-
-  assert.equal(ui.state.selected.step, 2);
-  assert.equal(timers.at(-1).milliseconds, 1000);
-  assert.equal(await ui.requestElementValidation(), false);
-  assert.equal(
-    requests.filter((item) => item.url.endsWith("/validate")).length,
-    0,
-  );
-  await timers.at(-1).callback();
-  assert.equal(ui.state.selected.suggestion.role, "button");
-  assert.equal(ui.state.selected.detail.revision, 7);
-  assert.equal(ui.state.selected.validationReady, true);
-  assert.doesNotMatch(JSON.stringify(ui.state.selected), /raw_dom|secret/);
-  assert.deepEqual(requests.find((item) => item.url.endsWith("/probe")).body, {
-    expected_revision: 5,
-  });
-  assert.deepEqual(requests.at(-1), {
-    url: "/api/selector-probe/elements/element-share",
-    method: "GET",
-    body: undefined,
-  });
-});
-
-test("draft candidates are never labeled active and missing comparison is explicit", () => {
-  const {document, nodes} = fakeDocument([
-    "selector-element-detail-title",
-    "selector-element-detail-alias",
-    "selector-element-detail-status",
-    "selector-element-detail-version",
-    "selector-element-detail-dependencies",
-    "selector-element-detail-last-validation",
-    "selector-element-detail-evidence",
-    "selector-element-detail-candidates",
-    "selector-element-detail-repairs",
-    "selector-element-detail-history",
-    "selector-element-validation-matrix",
-  ]);
-  renderElementDetail(document, {
-    id: "element-draft",
-    display_name: "草稿",
-    candidates: [{id: "draft", type: "css", value: ".draft", enabled: true}],
-  });
-
-  const candidateText = nodes.get("selector-element-detail-candidates").children
-    .map((item) => item.textContent || item.children.map((child) => child.textContent).join(" "))
-    .join(" ");
-  assert.doesNotMatch(candidateText, /Active/);
-  assert.match(candidateText, /暂无证据/);
-});
-
-test("migration requires backend availability then PATCHes semantic contract before probe", async () => {
-  const requests = [];
-  const ui = createSelectorProbeUI({
-    requestJson: async (url, method, body) => {
-      requests.push({url, method, body});
-      if (url === "/api/auth/session") return response({role: "administrator"});
-      if (url.endsWith("/status")) return response({});
-      if (method === "POST" && url.endsWith("/migrate")) {
-        return response({
-          id: "legacy-share",
-          display_name: "历史分享",
-          revision: 4,
-          migration_available: false,
-          management_source: "legacy_manual",
-          contract: null,
-        });
-      }
-      if (method === "PATCH" && url.endsWith("/draft")) {
-        return response({
-          id: "legacy-share",
-          display_name: "历史分享",
-          revision: 5,
-          management_source: "legacy_manual",
-          contract: body.contract,
-        });
-      }
-      return response({});
-    },
-    setInterval: () => 1,
-    clearInterval() {},
-    render() {},
-  });
-  await ui.init();
-
-  assert.equal(ui.openLegacyMigration({
-    id: "legacy-share",
-    revision: 0,
-    management_source: "legacy_manual",
-    migration_available: false,
-  }), false);
-  assert.equal(ui.openLegacyMigration({
-    id: "legacy-share",
-    display_name: "历史分享",
-    revision: 0,
-    management_source: "legacy_manual",
-    migration_available: true,
-  }), true);
-  await ui.requestLegacyMigration();
-  assert.deepEqual(
-    requests.find((item) => item.url.endsWith("/migrate")).body,
-    {expected_revision: 0},
-  );
-  assert.equal(ui.state.selected.kind, "wizard");
-  assert.equal(ui.state.selected.step, 1);
-  assert.equal(ui.state.selected.migrationDraft, true);
-
-  await ui.createElementDraft({
-    displayName: "历史分享",
-    intent: "find share control",
-    requiredState: "feed_ready",
-    scope: "active_video",
-    probeAction: "inspect_only",
-  });
-
-  const patch = requests.find((item) => item.method === "PATCH");
-  assert.equal(patch.body.expected_revision, 4);
-  assert.equal(patch.body.contract.intent, "find share control");
-  assert.equal(ui.state.selected.step, 2);
-  assert.equal(ui.state.selected.detail.revision, 5);
-});
-
-test("validation uses refreshed probe revision then replaces detail on terminal state", async () => {
-  const requests = [];
-  const ui = createSelectorProbeUI({
-    requestJson: async (url, method, body) => {
-      requests.push({url, method, body});
-      if (url === "/api/auth/session") return response({role: "administrator"});
-      if (url.endsWith("/status")) return response({});
-      if (method === "POST" && url.endsWith("/validate")) {
-        return {status: 202, data: {
-          request_id: "request-validate-1",
-          request_type: "validate",
-          element_id: "element-share",
-          expected_revision: 3,
-          status: "accepted",
-        }};
-      }
-      if (url.endsWith("/element-requests/request-validate-1")) {
-        return response({
-          request_id: "request-validate-1",
-          request_type: "validate",
-          element_id: "element-share",
-          status: "completed",
-          result: {
-            validation: {
-              status: "passed",
-              rounds: [
-                {profile_mask: "***3A7F", round: 1, status: "passed"},
-              ],
-            },
-          },
-        });
-      }
-      if (method === "GET" && url.endsWith("/elements/element-share")) {
-        return response({
-          id: "element-share",
-          revision: 4,
-          candidate_comparison: {active: [], deterministic: [], repaired: []},
-        });
-      }
-      return response({});
-    },
-    setInterval: () => 1,
-    clearInterval() {},
-    render() {},
-  });
-  await ui.init();
-  ui.openElementWizard();
-  ui.state.selected.detail = sanitizeElementDetail({
-    id: "element-share",
-    revision: 2,
-  });
-  ui.state.selected.validationReady = true;
-  ui.state.selected.probeCompletedRevision = 2;
-
-  assert.equal(await ui.requestElementValidation(), true);
-  assert.deepEqual(
-    requests.find((item) => item.url.endsWith("/validate")).body,
-    {expected_revision: 2},
-  );
-  assert.equal(ui.state.selected.detail.revision, 4);
-  assert.equal(ui.state.selected.validationReady, false);
-  assert.equal(ui.state.selected.step, 3);
-  assert.equal(ui.state.selected.validation.status, "passed");
-});
-
-test("publishing remains non-terminal until atomic publish and reconciliation complete", async () => {
-  const timers = [];
-  const requests = [];
-  let pollCount = 0;
-  const ui = createSelectorProbeUI({
-    requestJson: async (url, method, body) => {
-      requests.push({url, method, body});
-      if (url === "/api/auth/session") return response({role: "administrator"});
-      if (url.endsWith("/status")) return response({});
-      if (method === "POST" && url.endsWith("/validate")) {
-        return {status: 202, data: {
-          request_id: "request-publish-1",
-          request_type: "validate",
-          element_id: "element-share",
-          expected_revision: 3,
-          status: "accepted",
-        }};
-      }
-      if (url.endsWith("/element-requests/request-publish-1")) {
-        pollCount += 1;
-        return response(pollCount === 1 ? {
-          request_id: "request-publish-1",
-          request_type: "validate",
-          element_id: "element-share",
-          status: "publishing",
-        } : {
-          request_id: "request-publish-1",
-          request_type: "validate",
-          element_id: "element-share",
-          status: "completed",
-          result: {validation: {status: "passed", rounds: []}},
-        });
-      }
-      if (method === "GET" && url.endsWith("/elements/element-share")) {
-        return response({
-          id: "element-share",
-          revision: 4,
-          candidate_comparison: {active: [], deterministic: [], repaired: []},
-        });
-      }
-      return response({});
-    },
-    setTimeout: (callback, milliseconds) => {
-      timers.push({callback, milliseconds});
-      return timers.length;
-    },
-    clearTimeout() {},
-    setInterval: () => 1,
-    clearInterval() {},
-    render() {},
-  });
-  await ui.init();
-  ui.openElementWizard();
-  ui.state.selected.detail = sanitizeElementDetail({
-    id: "element-share",
-    revision: 2,
-  });
-  ui.state.selected.validationReady = true;
-  ui.state.selected.probeCompletedRevision = 2;
-
-  assert.equal(await ui.requestElementValidation(), true);
-  assert.equal(ui.state.selected.request.status, "publishing");
-  assert.equal(
-    elementRequestStatusText(ui.state.selected.request),
-    "validate · 原子发布/对账中",
-  );
-  assert.equal(timers.at(-1).milliseconds, 1000);
-  assert.equal(
-    requests.filter((item) => item.url.endsWith("/elements/element-share")).length,
-    0,
-  );
-  await timers.at(-1).callback();
-  assert.equal(ui.state.selected.request.status, "completed");
-  assert.equal(ui.state.selected.detail.revision, 4);
-});
-
-test("late request poll cannot contaminate a closed or replacement workspace", async () => {
-  const old = deferred();
-  const aborts = [];
-  const ui = createSelectorProbeUI({
-    requestJson: async (url) => {
-      if (url === "/api/auth/session") return response({role: "administrator"});
-      if (url.endsWith("/status")) return response({});
-      if (url.includes("/element-requests/")) return old.promise;
-      return response({});
-    },
-    createAbortController: () => ({
-      signal: {},
-      abort: () => aborts.push("aborted"),
-    }),
-    setInterval: () => 1,
-    clearInterval() {},
-    render() {},
-  });
-  await ui.init();
-  ui.openElementWizard();
-  ui.state.selected.request = {
-    request_id: "old-request",
-    request_type: "probe",
-    status: "processing",
-  };
-  const polling = ui.pollElementRequest("old-request");
-  ui.closeElementWorkspace();
-  ui.openElementWizard();
-  old.resolve(response({
-    request_id: "old-request",
-    request_type: "probe",
-    status: "completed",
-    result: {suggestion: {role: "button"}},
-  }));
-  await polling;
-
-  assert.equal(aborts.length, 1);
-  assert.equal(ui.state.selected.suggestion, null);
-  assert.equal(ui.state.selected.request, null);
-});
-
-test("native dialog cancel and close use unified workspace cleanup", () => {
-  function fakeDialog() {
-    const listeners = new Map();
-    return {
-      open: false,
-      addEventListener(type, callback) {
-        if (!listeners.has(type)) listeners.set(type, []);
-        listeners.get(type).push(callback);
-      },
-      emit(type, event = {}) {
-        (listeners.get(type) || []).forEach((callback) => callback(event));
-      },
-      showModal() {
-        this.open = true;
-      },
-      close() {
-        this.open = false;
-        this.emit("close");
-      },
-    };
-  }
-  const wizard = fakeDialog();
-  const migration = fakeDialog();
-  const document = {
-    visibilityState: "visible",
-    querySelector(selector) {
-      if (selector === "#selector-element-wizard") return wizard;
-      if (selector === "#selector-element-migration-dialog") return migration;
-      return null;
-    },
-    querySelectorAll() {
-      return [];
-    },
-  };
-  const dependencies = selectorProbeDependencies({
-    document,
-    fetch: async () => ({status: 200, json: async () => ({})}),
-    setInterval: () => 1,
-    clearInterval() {},
-    setTimeout: () => 1,
-    clearTimeout() {},
-  });
-  let cleanupCount = 0;
-  const controller = {
-    state: {
-      activeTab: "elements",
-      elements: {items: [], filters: {}},
-      selected: {kind: "wizard", step: 1},
-    },
-    closeElementWorkspace() {
-      cleanupCount += 1;
-      this.state.selected = null;
-    },
-  };
-  dependencies.render("shell", controller.state, controller);
-  let prevented = false;
-  wizard.emit("cancel", {preventDefault: () => { prevented = true; }});
-  assert.equal(prevented, true);
-  assert.equal(cleanupCount, 1);
-  assert.equal(controller.state.selected, null);
-
-  controller.state.selected = {kind: "migration"};
-  migration.emit("close");
-  assert.equal(cleanupCount, 2);
-  assert.equal(controller.state.selected, null);
-});
-
-test("operators cannot open create/validate UI and closing clears temporary state", async () => {
-  const ui = createSelectorProbeUI({
-    requestJson: async (url) => (
-      url === "/api/auth/session"
-        ? response({role: "operator"})
-        : response({})
-    ),
-    setInterval: () => 1,
-    clearInterval() {},
-    render() {},
-  });
-  await ui.init();
-
-  assert.equal(ui.openElementWizard(), false);
-  ui.state.selected = {
-    kind: "detail",
-    detail: {id: "element-1"},
-    suggestion: {
-      stable_attributes: [
-        {name: "data-e2e", value: "ephemeral-selector-value"},
-      ],
-    },
-  };
-  assert.equal(await ui.requestElementValidation(), false);
-  ui.closeElementWorkspace();
-
-  assert.equal(ui.state.selected, null);
-  assert.doesNotMatch(
-    JSON.stringify(ui.snapshot()),
-    /ephemeral-selector-value/,
-  );
-});
-
-test("discovered candidate opens prefilled existing element wizard", async () => {
-  const ui = createSelectorProbeUI({
-    requestJson: async (url) => (
-      url === "/api/auth/session"
-        ? response({role: "administrator"})
-        : response({items: [], page: 1, page_size: 20, total: 0})
-    ),
-    setInterval: () => 1,
-    clearInterval() {},
-    render() {},
-  });
-  await ui.init();
-
-  ui.openDiscoveryCandidate({
+  const selection = {
+    selection_id: "selection-1",
     fingerprint: "sha256:safe",
-    page_state: "comment_panel_open",
-    scope: "visible_comment_panel",
-    role: "textbox",
-    name: "Add comment",
-    attributes: {"data-e2e": "comment-input"},
-    recommended_locators: [{
-      id: "probe-input",
-      type: "attribute",
-      name: "data-e2e",
-      value: "comment-input",
-      enabled: true,
-    }],
+    page_state: "feed_ready",
+    scope: "active_video",
+    tag: "button",
+    role: "button",
+    name: "Comments",
+    attributes: {"data-e2e": "comment-icon"},
+    region: {x: 0.8, y: 0.4, width: 0.1, height: 0.1},
+    locatable: true,
+    locators: [{type: "css", value: "[data-e2e=\"comment-icon\"]", match_count: 1}],
+  };
+  const ui = createSelectorProbeUI({
+    requestJson: async (url, method, body) => {
+      requests.push({url, method, body});
+      if (url === "/api/auth/session") return response({role: "administrator"});
+      if (url.endsWith("/status")) return response({});
+      if (url.endsWith("/settings/profiles")) {
+        return response({items: [{
+          profile_ref: "prf_safe",
+          profile_mask: "***safe",
+          dedicated_test: true,
+          status: "healthy",
+        }]});
+      }
+      if (url.endsWith("/picker/start")) {
+        return {status: 202, data: {
+          session_id: "picker-1", status: "starting", revision: 1,
+          inventory: [], selection_count: 0,
+        }};
+      }
+      if (url.endsWith("/picker/picker-1")) {
+        return response({
+          session_id: "picker-1", status: "selecting", revision: 2,
+          inventory: [selection], selection_count: 1,
+        });
+      }
+      if (url.endsWith("/picker/picker-1/confirm")) {
+        return response({
+          session_id: "picker-1", status: "confirmed", revision: 3,
+          inventory: [selection],
+          selections: [{...selection, display_name: "评论入口"}],
+          selection_count: 1, cleanup: "passed",
+        });
+      }
+      if (url === "/api/selector-probe/elements" && method === "POST") {
+        return {status: 201, data: {id: "element-1", display_name: body.display_name}};
+      }
+      return response({items: [], page: 1, page_size: 20, total: 0});
+    },
+    setInterval: () => 1,
+    clearInterval() {},
+    setTimeout: () => 2,
+    clearTimeout() {},
+    documentVisible: () => true,
+    render() {},
   });
+  await ui.init();
 
-  assert.equal(ui.state.selected.kind, "wizard");
-  assert.equal(
-    ui.state.selected.form.requiredState,
-    "comment_panel_open",
-  );
-  assert.equal(ui.state.selected.form.scope, "visible_comment_panel");
-  assert.deepEqual(ui.state.selected.form.acceptedRoles, ["textbox"]);
-  assert.equal(
-    ui.state.selected.suggestion.candidates[0].value,
-    "comment-input",
-  );
+  assert.equal(await ui.openLivePicker(), true);
+  assert.equal(await ui.startLivePicker({
+    profileRef: "prf_safe",
+    pageState: "feed_ready",
+  }), true);
+  assert.equal(await ui.pollLivePicker(), true);
+  assert.equal(ui.state.picker.session.selection_count, 1);
+  assert.equal(await ui.confirmCollector([{
+    selectionId: "selection-1", displayName: "评论入口",
+  }]), true);
+
+  assert.equal(ui.state.activeTab, "managed");
+  const confirm = requests.find((item) => item.url.endsWith("/confirm"));
+  assert.deepEqual(confirm.body.selections, [{
+    selection_id: "selection-1", display_name: "评论入口",
+  }]);
+  const create = requests.find((item) => (
+    item.url === "/api/selector-probe/elements" && item.method === "POST"
+  ));
+  assert.equal(create.body.fingerprint.role, "button");
+  assert.deepEqual(create.body.locators, [{
+    type: "css", value: "[data-e2e=\"comment-icon\"]",
+  }]);
+  assert.doesNotMatch(JSON.stringify(sanitizePickerSession({
+    ...selection,
+    session_id: "picker-1",
+    status: "ready",
+    profile_id: "raw-secret",
+    cdp_url: "ws://secret",
+  })), /raw-secret|ws:\/\//);
 });
 
-test("legacy migration copy promises non-destructive observe-only rollout", () => {
-  const copy = migrationSafetyCopy();
+test("managed element controller renames rebinds and deletes through manual APIs", async () => {
+  const requests = [];
+  const definition = {
+    page_key: "tiktok.feed_ready",
+    target_origin: "https://www.tiktok.com",
+    url_pattern: "https://www.tiktok.com/*",
+    operation_steps: [],
+    fingerprint: {tag: "button", role: "button", name: "Comments"},
+    locators: [{type: "css", value: "[data-e2e=\"comment-icon\"]"}],
+  };
+  const ui = createSelectorProbeUI({
+    requestJson: async (url, method, body) => {
+      requests.push({url, method, body});
+      if (url === "/api/auth/session") return response({role: "administrator"});
+      if (url.endsWith("/status")) return response({});
+      if (url.includes("/elements?") && method === "GET") {
+        return response({items: [{
+          id: "element-1", display_name: "评论入口", status: "draft",
+          dependency_count: 0, revision: 4,
+        }], page: 1, page_size: 20, total: 1});
+      }
+      if (url.endsWith("/elements/element-1") && method === "PATCH") {
+        return response({id: "element-1", revision: body.operation === "rename" ? 5 : 6});
+      }
+      if (url.endsWith("/elements/element-1") && method === "DELETE") {
+        return {status: 204, data: {}};
+      }
+      return response({items: []});
+    },
+    setInterval: () => 1,
+    clearInterval() {},
+    render() {},
+  });
+  await ui.init();
+  await ui.activateTab("managed");
 
-  assert.match(copy, /保留当前 Locator/);
-  assert.match(copy, /仅观察/);
-  assert.match(copy, /策略依赖保持不变/);
-  assert.match(copy, /不会自动开启强制执行/);
+  assert.equal(await ui.renameElement("element-1", "新评论入口", 4), true);
+  assert.equal(await ui.rebindElement("element-1", definition, 5), true);
+  assert.equal(await ui.deleteElement("element-1", 6), true);
+
+  const writes = requests.filter((item) => item.url.endsWith("/elements/element-1"));
+  assert.deepEqual(writes.map((item) => [item.method, item.body.operation || "delete"]), [
+    ["PATCH", "rename"], ["PATCH", "rebind"], ["DELETE", "delete"],
+  ]);
 });

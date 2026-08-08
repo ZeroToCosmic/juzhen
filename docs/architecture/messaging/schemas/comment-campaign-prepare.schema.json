@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:local:architecture:comment-campaign-prepare",
+  "title": "Comment Campaign prepare RQ arguments",
+  "type": "object",
+  "properties": {
+    "campaign_id": {"type": "string", "minLength": 1, "maxLength": 120},
+    "generation": {"type": "integer", "minimum": 1, "description": "Encoded in the fixed RQ job ID; the job function reloads it from SQLite state."}
+  },
+  "required": ["campaign_id", "generation"],
+  "additionalProperties": false
+}

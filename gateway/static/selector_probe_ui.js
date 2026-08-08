@@ -24,14 +24,18 @@
 })(typeof globalThis !== "undefined" ? globalThis : this, function () {
   "use strict";
 
+  const inventoryUI = (
+    typeof globalThis !== "undefined" && globalThis.SelectorInventoryUI
+  ) || (
+    typeof require === "function"
+      ? require("./selector_inventory_ui")
+      : null
+  );
   const TABS = Object.freeze([
-    Object.freeze({id: "overview", label: "总览"}),
-    Object.freeze({id: "elements", label: "元素"}),
-    Object.freeze({id: "gates", label: "策略闸门"}),
-    Object.freeze({id: "runs", label: "探针运行"}),
-    Object.freeze({id: "versions", label: "版本"}),
-    Object.freeze({id: "alerts", label: "告警"}),
-    Object.freeze({id: "settings", label: "设置"}),
+    Object.freeze({id: "collect", label: "采集元素"}),
+    Object.freeze({id: "managed", label: "已选元素"}),
+    Object.freeze({id: "operations", label: "运行与告警"}),
+    Object.freeze({id: "settings", label: "系统设置"}),
   ]);
   const TAB_IDS = new Set(TABS.map((tab) => tab.id));
   const LIST_RESOURCES = new Set([
@@ -51,6 +55,8 @@
     settings: "/api/selector-probe/settings",
   });
   const POLL_INTERVAL_MS = 15000;
+  const PICKER_POLL_INTERVAL_MS = 500;
+  const PICKER_HIDDEN_POLL_INTERVAL_MS = 1500;
   const ELEMENT_SEARCH_DELAY_MS = 300;
   const ELEMENT_PAGE_SIZES = new Set([20, 50, 100]);
   const ELEMENT_REFERENCED_FILTERS = new Set(["all", "yes", "no"]);
@@ -130,7 +136,6 @@
   function clearSettingsFormSecrets(document) {
     if (!document) return;
     for (const selector of [
-      '[name="modelApiKey"]',
       '[name="redisPassword"]',
       '[name="webhookSigningSecret"]',
       '[name="webhookUrl"]',
@@ -275,73 +280,7 @@
     return session?.role === "administrator";
   }
 
-  const SAFE_PROBE_ACTIONS = new Set([
-    "inspect_only",
-    "open_read_only",
-    "close_read_only",
-  ]);
   const SAFE_LOCATOR_TYPES = new Set(["attribute", "role", "css", "xpath"]);
-  const DETAIL_TABS = Object.freeze([
-    "evidence",
-    "candidates",
-    "repairs",
-    "history",
-  ]);
-
-  function semanticValue(form, camelName, snakeName) {
-    return (
-      filterValue(form, camelName)
-      ?? filterValue(form, snakeName)
-    );
-  }
-
-  function textList(value) {
-    if (Array.isArray(value)) {
-      return value.map((item) => String(item).trim()).filter(Boolean);
-    }
-    return String(value || "")
-      .split(",")
-      .map((item) => item.trim())
-      .filter(Boolean);
-  }
-
-  function serializeSemanticContract(form) {
-    const probeAction = String(
-      semanticValue(form, "probeAction", "probe_action") || "",
-    ).trim();
-    if (!SAFE_PROBE_ACTIONS.has(probeAction)) {
-      throw new Error("unsafe_probe_action");
-    }
-    const payload = {
-      display_name: String(
-        semanticValue(form, "displayName", "display_name") || "",
-      ).trim(),
-      intent: String(semanticValue(form, "intent", "intent") || "").trim(),
-      required_state: String(
-        semanticValue(form, "requiredState", "required_state") || "",
-      ).trim(),
-      scope: String(semanticValue(form, "scope", "scope") || "").trim(),
-      probe_action: probeAction,
-    };
-    const optionalLists = [
-      ["acceptedRoles", "accepted_roles", "accepted_roles"],
-      ["acceptedNames", "accepted_names", "accepted_names"],
-      ["preferredAttributes", "preferred_attributes", "preferred_attributes"],
-    ];
-    for (const [camelName, snakeName, target] of optionalLists) {
-      const selected = textList(semanticValue(form, camelName, snakeName));
-      if (selected.length) payload[target] = selected;
-    }
-    const nameMode = String(
-      semanticValue(form, "nameMode", "name_mode") || "",
-    ).trim();
-    if (nameMode) payload.name_mode = nameMode;
-    const postcondition = String(
-      semanticValue(form, "postcondition", "postcondition") || "",
-    ).trim();
-    if (postcondition) payload.postcondition = postcondition;
-    return payload;
-  }
 
   function safeText(value, maximum = 240) {
     return typeof value === "string" ? value.slice(0, maximum) : "";
@@ -377,8 +316,6 @@
     const messages = {
       reason_required: "请填写危险变更原因",
       target_origin_invalid: "目标 Origin 必须是无账号密码的 HTTPS Origin",
-      preflight_required: "切换 Enforce 前请先运行预检",
-      preflight_failed: "Enforce 预检未通过",
       settings_draft_stale_reload_required: "设置已更新，请重新加载后再保存",
       settings_draft_editing: "设置草稿待保存",
       settings_save_failed: "设置保存失败，请重试",
@@ -489,40 +426,6 @@
     };
   }
 
-  function sanitizeProbeSuggestion(raw) {
-    const source = raw && typeof raw === "object" ? raw : {};
-    const stableAttributes = Array.isArray(source.stable_attributes)
-      ? source.stable_attributes.slice(0, 20).map((attribute) => ({
-        name: safeText(attribute?.name, 128),
-        value: safeText(attribute?.value, 240),
-      })).filter((attribute) => attribute.name)
-      : [];
-    const rejectedMethods = Array.isArray(source.rejected_methods)
-      ? source.rejected_methods.slice(0, 20).map((item) => ({
-        method: safeCode(item?.method),
-        code: safeCode(item?.code),
-      })).filter((item) => item.method && item.code)
-      : [];
-    const warnings = Array.isArray(source.warnings)
-      ? source.warnings.map(safeCode).filter(Boolean).slice(0, 20)
-      : [];
-    let candidates = [];
-    try {
-      candidates = sanitizeStructuredLocators(source.candidates, {editable: false});
-    } catch (_error) {
-      warnings.push("unsafe_candidate_omitted");
-    }
-    return {
-      role: safeText(source.role, 64),
-      name: safeText(source.name, 240),
-      stable_attributes: stableAttributes,
-      candidates,
-      llm_used: source.llm_used === true,
-      rejected_methods: rejectedMethods,
-      warnings,
-    };
-  }
-
   function sanitizeEvidence(raw) {
     const source = raw && typeof raw === "object" ? raw : {};
     const directRounds = Array.isArray(source.rounds) ? source.rounds : [];
@@ -533,49 +436,27 @@
     };
   }
 
-  function sanitizeRepairs(value) {
-    if (!Array.isArray(value)) return [];
-    return value.slice(0, 3).map((raw, index) => ({
-      attempt: Number(raw?.attempt ?? raw?.attempt_number) || index + 1,
-      previous_method: safeCode(raw?.previous_method),
-      failure_code: safeCode(raw?.failure_code),
-      match_count: Number.isInteger(raw?.match_count) ? raw.match_count : null,
-      new_method: safeCode(raw?.new_method),
-      prompt_version: safeText(raw?.prompt_version, 128),
-      model_id: safeText(raw?.model_id, 128),
-      validation_result: safeCode(
-        raw?.validation_result || raw?.status || raw?.result,
-      ),
-    }));
-  }
-
-  function sanitizeCandidateGroup(value) {
-    let locators = value;
-    if (value && !Array.isArray(value) && typeof value === "object") {
-      locators = value.locators;
-    }
-    if (
-      Array.isArray(locators)
-      && locators.length
-      && locators.every(
-        (item) => item && typeof item === "object" && Array.isArray(item.locators),
-      )
-    ) {
-      locators = locators.flatMap((item) => item.locators);
-    }
-    try {
-      return sanitizeStructuredLocators(locators, {editable: false});
-    } catch (_error) {
-      return [];
-    }
-  }
-
   function sanitizeElementDetail(raw) {
     const source = raw && typeof raw === "object" ? raw : {};
-    const comparison = (
-      source.candidate_comparison
-      && typeof source.candidate_comparison === "object"
-    ) ? source.candidate_comparison : {};
+    const manualDefinition = source.definition && typeof source.definition === "object"
+      ? {
+        page_key: safeText(source.definition.page_key, 120),
+        target_origin: safeText(source.definition.target_origin, 255),
+        url_pattern: safeText(source.definition.url_pattern, 2000),
+        operation_steps: Array.isArray(source.definition.operation_steps)
+          ? source.definition.operation_steps.slice(0, 20)
+          : [],
+        fingerprint: source.definition.fingerprint && typeof source.definition.fingerprint === "object"
+          ? clone(source.definition.fingerprint)
+          : {},
+        locators: inventoryUI
+          ? inventoryUI.sanitizeInventory([{
+            selection_id: "detail",
+            locators: source.definition.locators,
+          }])[0]?.locators || []
+          : [],
+      }
+      : null;
     const dependencies = Array.isArray(source.dependencies)
       ? source.dependencies.slice(0, 100).map((item) => ({
         strategy_id: safeText(item?.strategy_id, 128),
@@ -592,25 +473,11 @@
         summary: safeText(item?.summary, 240),
       }))
       : [];
-    const contract = source.contract && typeof source.contract === "object"
-      ? {
-        intent: safeText(source.contract.intent, 500),
-        required_state: safeCode(source.contract.required_state),
-        scope: safeCode(source.contract.scope),
-        probe_action: safeCode(source.contract.probe_action),
-      }
-      : null;
     return {
       id: safeText(source.id, 128),
       display_name: safeText(source.display_name, 240),
-      management_source: safeCode(source.management_source),
-      published_status: safeCode(source.published_status),
-      draft_status: safeCode(source.draft_status),
-      scope: safeCode(source.scope),
-      active_version: safeText(
-        source.active_version || source.base_version_id,
-        128,
-      ),
+      status: safeCode(source.status),
+      page_key: safeText(source.page_key, 120),
       dependency_count: Number(source.dependency_count) || dependencies.length,
       last_validated_at: safeText(source.last_validated_at, 128),
       revision: (
@@ -618,18 +485,21 @@
           ? source.revision
           : 0
       ),
-      migration_available: source.migration_available === true,
-      contract,
-      evidence: sanitizeEvidence(source.evidence),
-      draft_candidates: sanitizeCandidateGroup(source.candidates),
-      candidate_comparison: {
-        active: sanitizeCandidateGroup(comparison.active),
-        deterministic: sanitizeCandidateGroup(comparison.deterministic),
-        repaired: sanitizeCandidateGroup(comparison.repaired),
-      },
-      repairs: sanitizeRepairs(source.repairs),
+      definition: manualDefinition,
+      validation: sanitizeEvidence(source.validation),
       history,
       dependencies,
+      alerts: Array.isArray(source.alerts) ? source.alerts.slice(0, 100).map((item) => ({
+        id: safeText(item?.id, 128),
+        status: safeCode(item?.status),
+        failure_code: safeCode(item?.failure_code),
+      })) : [],
+      strategy_controls: source.strategy_controls && typeof source.strategy_controls === "object"
+        ? {
+          automatic_pause: source.strategy_controls.automatic_pause === true,
+          manual_pause: source.strategy_controls.manual_pause === true,
+        }
+        : {},
     };
   }
 
@@ -707,53 +577,38 @@
     };
   }
 
-  const DISCOVERY_ATTRIBUTE_NAMES = new Set([
-    "data-e2e",
-    "data-testid",
-    "aria-label",
-    "name",
-    "placeholder",
-    "contenteditable",
-    "type",
-    "id",
-  ]);
-
-  function sanitizeDiscovery(raw) {
+  function sanitizePickerSession(raw) {
     const source = raw && typeof raw === "object" ? raw : {};
-    const attributes = {};
-    if (source.attributes && typeof source.attributes === "object") {
-      Object.entries(source.attributes).slice(0, 20).forEach(([key, value]) => {
-        if (DISCOVERY_ATTRIBUTE_NAMES.has(key)) {
-          attributes[key] = safeText(value, 160);
-        }
-      });
-    }
-    let recommendedLocators = [];
-    try {
-      recommendedLocators = sanitizeStructuredLocators(
-        source.recommended_locators || [],
-        {editable: false},
-      );
-    } catch (_error) {
-      recommendedLocators = [];
-    }
+    const allowed = new Set([
+      "starting", "ready", "selecting", "confirmed", "cancelled",
+      "expired", "failed",
+    ]);
     return {
-      fingerprint: safeText(source.fingerprint, 80),
+      session_id: safeText(source.session_id, 64),
+      status: allowed.has(source.status) ? source.status : "failed",
+      profile_mask: safeText(source.profile_mask, 32),
       page_state: safeCode(source.page_state),
-      scope: safeCode(source.scope),
-      role: safeCode(source.role),
-      name: safeText(source.name, 160),
-      states: (
-        source.states && typeof source.states === "object"
-          ? Object.fromEntries(Object.entries(source.states).slice(0, 32))
-          : {}
-      ),
-      attributes,
-      actionable: source.actionable === true,
-      profile_masks: safeStringList(source.profile_masks, 8)
-        .filter(validProfileMask),
-      profile_count: Math.max(Number(source.profile_count) || 0, 0),
-      recommended_locators: recommendedLocators,
+      inventory: inventoryUI
+        ? inventoryUI.sanitizeInventory(source.inventory || [])
+        : [],
+      recorded_steps: Array.isArray(source.recorded_steps)
+        ? source.recorded_steps.slice(0, 20).map((item) => ({
+          sequence: Math.max(Number(item?.sequence) || 0, 0),
+          locator: sanitizeStructuredLocators(
+            item?.locator ? [item.locator] : [],
+            {editable: false},
+          )[0] || null,
+          url_before: safeText(item?.url_before, 500),
+          url_after: safeText(item?.url_after, 500),
+        }))
+        : [],
+      truncated: source.truncated === true,
+      selection_count: Math.min(Math.max(Number(source.selection_count) || 0, 0), 20),
+      max_selections: 20,
+      revision: Math.max(Number(source.revision) || 0, 0),
+      cleanup: safeCode(source.cleanup),
+      failure_code: safeCode(source.failure_code),
+      expires_at: safeText(source.expires_at, 64),
     };
   }
 
@@ -763,32 +618,128 @@
     return ACTIVE_RUN_STATUSES.has(safeCode(raw?.status));
   }
 
+  const USER_STAGE_STATUS_LABELS = Object.freeze({
+    waiting: "等待执行",
+    running: "运行中",
+    skipped: "已跳过",
+    success: "成功",
+    failed: "失败",
+  });
+  const SUCCESS_OPERATION_STATUSES = new Set([
+    "passed", "completed", "success", "succeeded", "published", "released",
+  ]);
+  const ACTIVE_OPERATION_STATUSES = new Set([
+    "running", "processing", "publishing", "reconciling",
+  ]);
+  const SKIPPED_OPERATION_STATUSES = new Set(["skipped", "not_required"]);
+  const FAILED_OPERATION_STATUSES = new Set([
+    "failed", "error", "conflict", "dispatch_failed", "lease_busy",
+    "publication_failed", "selector_validation_failed",
+    "probe_cleanup_failed", "probe_lease_lost", "probe_safety_violation",
+    "infrastructure_failed", "infrastructure_unavailable", "probe_unavailable",
+  ]);
+
+  function operationLifecycle(raw, options = {}) {
+    const operation = safeOperationState(raw);
+    if (options.skip === true) return "skipped";
+    if (operation.failure_code || FAILED_OPERATION_STATUSES.has(operation.status)) {
+      return "failed";
+    }
+    if (ACTIVE_OPERATION_STATUSES.has(operation.status)) return "running";
+    if (SUCCESS_OPERATION_STATUSES.has(operation.status)) return "success";
+    if (SKIPPED_OPERATION_STATUSES.has(operation.status)) {
+      return "skipped";
+    }
+    return "waiting";
+  }
+
+  function aggregateLifecycle(values, active) {
+    const statuses = values.filter(Boolean);
+    if (statuses.includes("failed")) return "failed";
+    if (statuses.includes("running")) return "running";
+    if (statuses.length && statuses.every((value) => value === "skipped")) {
+      return "skipped";
+    }
+    if (
+      statuses.length
+      && statuses.every((value) => ["success", "skipped"].includes(value))
+    ) return "success";
+    if (active && statuses.some((value) => value !== "waiting")) return "running";
+    return "waiting";
+  }
+
+  function leaseAcquisitionLifecycle(raw) {
+    const operation = safeOperationState(raw);
+    if (operation.failure_code || FAILED_OPERATION_STATUSES.has(operation.status)) {
+      return "failed";
+    }
+    if (["running", "held", "acquired", "released"].includes(operation.status)) {
+      return "success";
+    }
+    return "waiting";
+  }
+
+  function leaseReleaseLifecycle(raw) {
+    const operation = safeOperationState(raw);
+    if (operation.failure_code || FAILED_OPERATION_STATUSES.has(operation.status)) {
+      return "failed";
+    }
+    return operation.status === "released" ? "success" : "waiting";
+  }
+
+  function runStatusLifecycle(status) {
+    const code = safeCode(status);
+    if (ACTIVE_RUN_STATUSES.has(code)) {
+      return code === "queued" ? "waiting" : "running";
+    }
+    if (code === "awaiting_element_selection") return "skipped";
+    if (code === "completed") return "success";
+    if (FAILED_OPERATION_STATUSES.has(code)) return "failed";
+    return "waiting";
+  }
+
+  function stageSignals(run, names) {
+    const allowed = new Set(names);
+    return run.stages.filter((stage) => allowed.has(stage.name));
+  }
+
+  function roundStatusLabel(status) {
+    return USER_STAGE_STATUS_LABELS[operationLifecycle({status})];
+  }
+
   function sanitizeRun(raw) {
     const source = raw && typeof raw === "object" ? raw : {};
     const profiles = Array.isArray(source.profiles)
       ? source.profiles.slice(0, 8).map((item) => ({
-        profile_mask: safeText(item?.profile_mask, 16),
-        status: safeCode(item?.status) || "unknown",
+        profile_mask: safeText(
+          typeof item === "string" ? item : item?.profile_mask,
+          16,
+        ),
+        status: safeCode(
+          typeof item === "string" ? "" : item?.status,
+        ) || "unknown",
       })).filter((item) => validProfileMask(item.profile_mask))
       : [];
     const stages = Array.isArray(source.stages)
-      ? source.stages.slice(0, 30).map((item) => ({
-        name: safeCode(item?.name) || "unknown",
-        ...safeOperationState(item),
-      }))
+      ? source.stages.slice(0, 30).map((item) => {
+        const profileMask = safeText(item?.profile_mask, 16);
+        return {
+          name: safeCode(item?.name) || "unknown",
+          ...safeOperationState(item),
+          profile_mask: validProfileMask(profileMask) ? profileMask : "",
+          summary: safeText(item?.summary, 240),
+        };
+      })
       : [];
     const elements = Array.isArray(source.elements)
       ? source.elements.slice(0, 200).map((item) => ({
         alias: safeText(item?.alias || item?.element_id, 128),
         status: safeCode(item?.status) || "unknown",
         failure_class: safeCode(item?.failure_class),
-        repair_attempt_count: Number.isInteger(item?.repair_attempt_count)
-          ? Math.min(Math.max(item.repair_attempt_count, 0), 3)
-          : 0,
       }))
       : [];
-    const repairs = sanitizeRepairs(source.repairs);
     const retryDelay = Number(source.retry_delay_minutes);
+    const failure = safeOperationState(source.failure);
     return {
       id: safeText(source.id || source.run_id || source.request_id, 128),
       status: safeCode(source.status) || "unknown",
@@ -804,15 +755,13 @@
         : [],
       stages,
       elements,
-      discoveries: Array.isArray(source.discoveries)
-        ? source.discoveries.slice(0, 200).map(sanitizeDiscovery)
-        : [],
       failed_aliases: safeStringList(source.failed_aliases, 200),
-      repairs,
       publication: safeOperationState(source.publication),
       reconciliation: safeOperationState(source.reconciliation),
       cleanup: safeOperationState(source.cleanup),
       lease: safeOperationState(source.lease),
+      failure,
+      failure_code: safeCode(source.failure_code) || failure.failure_code,
       failure_class: safeCode(source.failure_class),
       next_retry_at: safeText(source.next_retry_at, 128),
       retry_delay_minutes: [15, 30, 60].includes(retryDelay)
@@ -821,6 +770,269 @@
       active_version_before: safeText(source.active_version_before, 128),
       published_version_after: safeText(source.published_version_after, 128),
     };
+  }
+
+  const FAILURE_REASON_LABELS = Object.freeze({
+    awaiting_element_selection: "暂无可验证元素。请先采集并保存元素，或重新绑定现有元素。",
+    comment_panel_readiness_timeout: "评论区关键控件未在限定时间内就绪",
+    comment_panel_element_missing: "评论区缺少输入框或提交按钮",
+    comment_panel_snapshot_unstable: "评论区关键控件持续变化，无法确认稳定路径",
+    probe_panel_check_failed: "系统无法安全检查评论区",
+    element_candidate_not_found: "未找到可验证的元素候选",
+    cdp_unavailable: "无法连接测试 Profile 浏览器",
+    profile_cdp_collision: "两个测试 Profile 返回了同一个浏览器连接",
+    probe_page_duplicate: "同一个测试 Profile 重复创建了探针页面",
+    dispatch_failed: "探针任务未能启动",
+    probe_dispatch_failed: "探针调度器执行失败",
+    probe_store_unavailable: "探针运行记录存储暂时不可用",
+    probe_dependency_unavailable: "探针依赖服务暂时不可用",
+    probe_dispatch_timeout: "探针调度启动超时",
+    probe_navigation_timeout: "打开 TikTok 页面超时",
+    probe_navigation_failed: "打开 TikTok 页面失败",
+    page_readiness_timeout: "TikTok 页面未在限定时间内完成加载",
+    validate_active_unavailable: "无法读取或验证当前稳定选择器版本",
+    candidate_validation_unavailable: "候选选择器验证服务不可用",
+    full_validation_unavailable: "两个 Profile 两轮验证未完成",
+    lease_busy: "已有探针正在运行",
+    publication_failed: "验证结果未能发布",
+    selector_validation_failed: "元素选择器验证失败",
+    selector_unsafe: "已发现候选路径，但路径未通过安全规则",
+  });
+
+  function buildRunPresentation(raw) {
+    const run = sanitizeRun(raw);
+    const active = runIsActive(run);
+    const stageStatus = (names) => aggregateLifecycle(
+      stageSignals(run, names).map((stage) => operationLifecycle(stage)),
+      active,
+    );
+    const environmentSignals = stageSignals(run, [
+      "cdp_endpoint", "cdp_ready", "probe_page_open", "profile_start",
+      "profile_binding", "profile_page_binding",
+    ]).map((stage) => operationLifecycle(stage));
+    if (run.lease.status !== "unknown") {
+      environmentSignals.push(leaseAcquisitionLifecycle(run.lease));
+    }
+    const environmentStatus = aggregateLifecycle(environmentSignals, active);
+    const pageStatus = stageStatus(["page_readiness"]);
+    const elementStageEvidence = stageSignals(run, [
+      "a11y_snapshot", "candidate_filter", "element_dry_run",
+      "comment_panel_transition", "comment_panel_cleanup", "validate",
+      "full_validation",
+    ]);
+    const failedElementEvidence = elementStageEvidence.find(
+      (stage) => stage.failure_code || operationLifecycle(stage) === "failed",
+    );
+    const elementFailureResult = FAILURE_REASON_LABELS[
+      failedElementEvidence?.failure_code
+    ];
+    const elementSignals = elementStageEvidence
+      .map((stage) => operationLifecycle(stage)).concat(
+      run.elements.map((item) => operationLifecycle({
+        status: item.status,
+        failure_code: item.failure_class,
+      })),
+    );
+    const elementStatus = aggregateLifecycle(elementSignals, active);
+
+    const profileMasks = Array.from(new Set(
+      run.profiles.map((profile) => profile.profile_mask)
+        .concat(run.rounds.map((round) => round.profile_mask))
+        .filter(Boolean),
+    ));
+    const roundLines = profileMasks.map((profileMask) => {
+      const rounds = run.rounds.filter(
+        (round) => round.profile_mask === profileMask,
+      );
+      const line = [1, 2].map((number) => {
+        const round = rounds.find((item) => item.round === number);
+        return `第 ${number} 轮${round ? roundStatusLabel(round.status) : "等待执行"}`;
+      }).join(" / ");
+      return `${profileMask}：${line}`;
+    });
+    const roundStatuses = run.rounds.map((round) => operationLifecycle({
+      status: round.status,
+      failure_code: round.failure_code,
+    }));
+    let roundsStatus = aggregateLifecycle(roundStatuses, active);
+    const profilesComplete = profileMasks.length >= 2 && profileMasks.every(
+      (profileMask) => [1, 2].every((number) => run.rounds.some((round) => (
+        round.profile_mask === profileMask
+        && round.round === number
+        && operationLifecycle({status: round.status}) === "success"
+      ))),
+    );
+    if (profilesComplete) roundsStatus = "success";
+    if (!run.rounds.length && !run.profiles.length) roundsStatus = "waiting";
+
+    const observeOnly = run.rollout_mode === "observe";
+    const publicationStatus = operationLifecycle(
+      run.publication,
+      {skip: observeOnly},
+    );
+    const reconciliationStatus = operationLifecycle(
+      run.reconciliation,
+      {skip: observeOnly},
+    );
+    const finalStatus = aggregateLifecycle([
+      publicationStatus,
+      reconciliationStatus,
+      operationLifecycle(run.cleanup),
+      leaseReleaseLifecycle(run.lease),
+    ], false);
+
+    const stages = [
+      {
+        id: "environment",
+        title: "准备测试环境",
+        purpose: "连接两个独立测试 Profile，取得运行锁并打开探针页面。",
+        status: environmentStatus,
+        result: run.profiles.length
+          ? `已记录 ${run.profiles.length}/2 个测试 Profile`
+          : "Profile 验证尚未开始",
+      },
+      {
+        id: "page",
+        title: "加载 TikTok 页面",
+        purpose: "确认页面不是空白、登录、验证码或初始加载状态。",
+        status: pageStatus,
+        result: pageStatus === "success"
+          ? "TikTok 页面已就绪"
+          : "等待页面完成加载",
+      },
+      {
+        id: "elements",
+        title: "发现并验证元素",
+        purpose: "使用已保存路径定位元素，并执行只读 Dry-Run。",
+        status: elementStatus,
+        result: elementFailureResult
+          ? elementFailureResult
+          : (run.elements.length
+            ? `已记录 ${run.elements.length} 个元素结果`
+            : "尚未产生元素验证结果"),
+      },
+      {
+        id: "rounds",
+        title: "两个 Profile 连续两轮确认",
+        purpose: "排除单账号、单轮或临时网络状态造成的假成功。",
+        status: roundsStatus,
+        result: roundLines.length
+          ? roundLines.join("；")
+          : "稳定性验证尚未开始",
+      },
+      {
+        id: "finalize",
+        title: "发布结果并清理",
+        purpose: "发布验证结果、同步受影响策略、关闭页面并释放运行锁。",
+        status: finalStatus,
+        result: observeOnly
+          ? "观察模式，不发布；本次无需协调"
+          : `发布${USER_STAGE_STATUS_LABELS[publicationStatus]}；策略协调${USER_STAGE_STATUS_LABELS[reconciliationStatus]}；清理${USER_STAGE_STATUS_LABELS[operationLifecycle(run.cleanup)]}`,
+      },
+    ].map((stage) => ({
+      ...stage,
+      statusLabel: USER_STAGE_STATUS_LABELS[stage.status],
+    }));
+
+    const overallStatus = runStatusLifecycle(run.status);
+    const awaitingElementSelection = (
+      run.status === "awaiting_element_selection"
+    );
+    if (overallStatus === "success" || awaitingElementSelection) {
+      stages.forEach((stage, index) => {
+        if (stage.status !== "waiting") return;
+        stages[index] = {
+          ...stage,
+          status: "skipped",
+          statusLabel: USER_STAGE_STATUS_LABELS.skipped,
+          result: awaitingElementSelection
+            ? "尚无已保存且可验证的元素，本步骤未启动"
+            : "历史记录未保留此步骤明细",
+        };
+      });
+    }
+    const failedStage = stages.find((stage) => stage.status === "failed");
+    const unrecordedFailure = (
+      overallStatus === "failed" && !failedStage
+    ) ? {
+      id: "unrecorded_failure",
+      title: "失败阶段未记录",
+      purpose: "后端未保存可确认的失败阶段，不将故障归因到任一业务步骤。",
+      status: "failed",
+      statusLabel: USER_STAGE_STATUS_LABELS.failed,
+      result: "请查看安全错误码和后台安全日志。",
+    } : null;
+    const currentStage = failedStage
+      || unrecordedFailure
+      || stages.find((stage) => stage.status === "running")
+      || stages.find((stage) => stage.status === "waiting")
+      || stages.at(-1);
+    const failureStage = run.stages.find(
+      (stage) => stage.failure_code || operationLifecycle(stage) === "failed",
+    );
+    const failureCode = failureStage?.failure_code
+      || run.failure_code
+      || run.failure.failure_code
+      || run.failure_class
+      || (overallStatus === "failed" ? run.status : "");
+    const impactParts = [
+      failureStage?.profile_mask,
+      failureStage?.round ? `第 ${failureStage.round} 轮` : "",
+      run.failed_aliases.length ? `元素 ${run.failed_aliases.join("、")}` : "",
+    ].filter(Boolean);
+    const failure = (failedStage || overallStatus === "failed") ? {
+      reason: FAILURE_REASON_LABELS[failureCode] || "探针未完成当前步骤",
+      impact: impactParts.join("；") || "等待系统确认",
+      nextAction: run.next_retry_at
+        ? `系统计划在 ${run.next_retry_at} 重试`
+        : (run.active_version_before
+          ? "继续使用上一稳定版，等待后续验证"
+          : "等待系统重试或人工确认"),
+    } : null;
+
+    return {
+      run,
+      status: overallStatus,
+      statusLabel: USER_STAGE_STATUS_LABELS[overallStatus],
+      currentStage,
+      completedStages: stages.filter(
+        (stage) => ["success", "skipped"].includes(stage.status),
+      ).length,
+      stages,
+      result: awaitingElementSelection
+        ? FAILURE_REASON_LABELS.awaiting_element_selection
+        : (failure?.reason || currentStage.result),
+      failure,
+    };
+  }
+
+  function runTechnicalLines(raw) {
+    const run = sanitizeRun(raw);
+    const stages = run.stages.map((stage) => [
+      stage.name,
+      stage.status,
+      stage.profile_mask ? `Profile ${stage.profile_mask}` : "",
+      stage.round ? `第 ${stage.round} 轮` : "",
+      stage.attempt_count ? `尝试 ${stage.attempt_count}` : "",
+      stage.duration_ms !== null ? `${stage.duration_ms}ms` : "",
+      stage.failure_code || "",
+    ].filter(Boolean).join(" · "));
+    const operationLine = (label, value) => {
+      const operation = safeOperationState(value);
+      return [
+        `${label}: ${operation.status}`,
+        operation.failure_code,
+        operation.duration_ms !== null ? `${operation.duration_ms}ms` : "",
+        operation.attempt_count ? `尝试 ${operation.attempt_count}` : "",
+      ].filter(Boolean).join(" · ");
+    };
+    const operations = [
+      operationLine("publish", run.publication),
+      operationLine("reconcile", run.reconciliation),
+      operationLine("cleanup", run.cleanup),
+      operationLine("lease", run.lease),
+    ];
+    return stages.concat(operations);
   }
 
   function sanitizeVersion(raw) {
@@ -846,8 +1058,6 @@
       is_lkg: source.is_lkg === true || source.status === "lkg",
       base_version_id: safeText(source.base_version_id, 128),
       bundle_hash: safeText(source.bundle_hash, 128),
-      model_id: safeText(source.model_id, 128),
-      prompt_version: safeText(source.prompt_version, 128),
       created_at: safeText(source.created_at, 128),
       validated_at: safeText(source.validated_at, 128),
       published_at: safeText(source.published_at, 128),
@@ -908,7 +1118,6 @@
       ),
       active_version: safeText(source.active_version, 128),
       lkg_version: safeText(source.lkg_version, 128),
-      repairs: sanitizeRepairs(source.repairs),
       retries,
       webhook: safeOperationState(source.webhook),
       gate_active: source.gate_active === true,
@@ -991,40 +1200,8 @@
     return false;
   }
 
-  function sanitizePreflight(raw) {
-    const source = raw && typeof raw === "object" ? raw : {};
-    const checks = source.checks && typeof source.checks === "object"
-      ? source.checks
-      : {};
-    const result = {
-      status: safeCode(source.status) || "unknown",
-      base_revision: (
-        Number.isInteger(source.base_revision) && source.base_revision >= 0
-          ? source.base_revision
-          : null
-      ),
-      candidate_fingerprint: safeText(source.candidate_fingerprint, 128),
-      preflight_token: safeText(source.preflight_token, 256),
-      checks: {},
-      checked_at: safeText(source.checked_at, 128),
-    };
-    for (const key of [
-      "profiles",
-      "redis_aof",
-      "redis_eviction",
-      "model",
-      "webhook",
-    ]) {
-      result.checks[key] = safeCode(checks[key]) || "unknown";
-    }
-    return result;
-  }
-
   function sanitizeSettings(raw) {
     const source = raw && typeof raw === "object" ? raw : {};
-    const model = source.model && typeof source.model === "object"
-      ? source.model
-      : {};
     const redis = source.redis && typeof source.redis === "object"
       ? source.redis
       : {};
@@ -1065,6 +1242,9 @@
         : "03:00",
       timezone: safeText(source.timezone, 64) || "Asia/Shanghai",
       target_origin: safeText(source.target_origin, 240),
+      page_timeout_seconds: Number.isInteger(source.page_timeout_seconds)
+        ? Math.min(Math.max(source.page_timeout_seconds, 10), 300)
+        : 90,
       freshness_hours: Number.isInteger(source.freshness_hours)
         ? Math.max(source.freshness_hours, 0)
         : 36,
@@ -1078,13 +1258,6 @@
           : [15, 30, 60],
       },
       profiles,
-      model: {
-        id: safeText(model.id, 128),
-        provider: safeCode(model.provider),
-        mode: safeCode(model.mode),
-        status: safeCode(model.status) || "unknown",
-        api_key_set: model.api_key_set === true,
-      },
       redis: {
         status: safeCode(redis.status) || "unknown",
         namespace: safeText(redis.namespace, 128),
@@ -1136,13 +1309,13 @@
       schedule_time: settings.schedule_time,
       timezone: settings.timezone,
       target_origin: settings.target_origin,
+      page_timeout_seconds: settings.page_timeout_seconds,
       freshness_hours: settings.freshness_hours,
       retry_policy: clone(settings.retry_policy),
       profiles: settings.profiles.map((item) => ({
         profile_ref: item.profile_ref,
         dedicated_test: item.dedicated_test,
       })),
-      model: {id: settings.model.id},
       redis: {namespace: settings.redis.namespace},
       webhook: {
         enabled: settings.webhook.enabled,
@@ -1185,39 +1358,6 @@
     return changed;
   }
 
-  function preflightPassed(raw) {
-    const preflight = sanitizePreflight(raw);
-    return (
-      preflight.status === "passed"
-      && [
-        "profiles",
-        "redis_aof",
-        "redis_eviction",
-        "model",
-        "webhook",
-      ].every((key) => preflight.checks[key] === "passed")
-    );
-  }
-
-  function enforceSettingsReady(raw) {
-    const settings = sanitizeSettings(raw);
-    const profileRefs = new Set(
-      settings.profiles.map((item) => item.profile_ref),
-    );
-    return (
-      profileRefs.size >= 2
-      && settings.profiles.every(
-        (item) => item.dedicated_test && item.status === "healthy",
-      )
-      && settings.redis.aof_enabled
-      && settings.redis.eviction_policy === "noeviction"
-      && Boolean(settings.model.id)
-      && settings.model.status === "passed"
-      && settings.webhook.enabled
-      && settings.webhook.status === "passed"
-    );
-  }
-
   function validateSettingsSave(beforeRaw, afterRaw, options) {
     const before = sanitizeSettings(beforeRaw);
     const after = sanitizeSettings(afterRaw);
@@ -1239,19 +1379,6 @@
     if (changes.length && !safeText(options?.reason, 500).trim()) {
       errors.push("reason_required");
     }
-    if (
-      before.rollout_mode !== "enforce"
-      && after.rollout_mode === "enforce"
-    ) {
-      if (!options?.preflight) {
-        errors.push("preflight_required");
-      } else if (
-        !preflightPassed(options.preflight)
-        || !enforceSettingsReady(after)
-      ) {
-        errors.push("preflight_failed");
-      }
-    }
     return {errors, dangerous_changes: changes};
   }
 
@@ -1263,15 +1390,6 @@
       site: settings.site,
       synthetic: true,
     };
-  }
-
-  function elementRequestStatusText(raw) {
-    const requestType = safeCode(raw?.request_type) || "request";
-    const status = safeCode(raw?.status) || "unknown";
-    if (status === "publishing") {
-      return `${requestType} · 原子发布/对账中`;
-    }
-    return `${requestType} · ${status}`;
   }
 
   function sanitizeAccount(raw) {
@@ -1328,14 +1446,10 @@
     };
   }
 
-  function migrationSafetyCopy() {
-    return "保留当前 Locator；先进行仅观察运行；管理员确认语义契约；策略依赖保持不变；不会自动开启强制执行。";
-  }
-
   function createSelectorProbeUI(dependencies) {
     const deps = dependencies || {};
     const state = {
-      activeTab: "overview",
+      activeTab: "collect",
       status: null,
       overview: null,
       elements: listState(true),
@@ -1347,13 +1461,13 @@
       settingsDraft: null,
       settingsDraftBaseRevision: null,
       settingsDraftStale: false,
-      settingsPreflight: null,
       settingsStatus: "",
       settingsProfileAdds: [],
       accounts: {items: [], error: "", loading: false},
       temporaryCredential: null,
       session: null,
-      selected: null,
+      picker: null,
+      pendingRebindId: "",
       operationWorkspace: null,
       pending: new Map(),
     };
@@ -1362,13 +1476,11 @@
     let initPromise = null;
     let pollTimer = null;
     let elementSearchTimer = null;
-    let elementRequestTimer = null;
-    let workspaceGeneration = 0;
+    let pickerTimer = null;
     let operationGeneration = 0;
     let runDetailTimer = null;
     let pendingSettingsSecrets = {};
     let pendingProfileAdds = [];
-    let settingsPreflightBinding = null;
     let removeVisibilityListener = null;
     let destroyed = false;
 
@@ -1433,7 +1545,6 @@
         return true;
       }
       if (resource === "settings") {
-        const previousRevision = Number(state.settings?.revision);
         state.settings = Object.assign(sanitizeSettings(data), {revision});
         if (
           state.settingsDraft
@@ -1442,17 +1553,6 @@
         ) {
           state.settingsDraftStale = true;
           state.settingsStatus = "settings_draft_stale_reload_required";
-        }
-        if (
-          settingsPreflightBinding
-          && Number.isFinite(previousRevision)
-          && previousRevision !== revision
-        ) {
-          state.settingsPreflight = null;
-          settingsPreflightBinding = null;
-          if (!state.settingsDraftStale) {
-            state.settingsStatus = "preflight_invalidated_revision_changed";
-          }
         }
         return true;
       }
@@ -1512,8 +1612,6 @@
       state.settingsDraft = null;
       state.settingsDraftBaseRevision = null;
       state.settingsDraftStale = false;
-      state.settingsPreflight = null;
-      settingsPreflightBinding = null;
       if (state.operationWorkspace?.kind === "settings-confirm") {
         state.operationWorkspace = null;
       }
@@ -1593,6 +1691,15 @@
     }
 
     function refreshCurrent() {
+      if (state.activeTab === "collect") {
+        return refresh("overview");
+      }
+      if (state.activeTab === "managed") return refresh("elements");
+      if (state.activeTab === "operations") {
+        return Promise.all([
+          refresh("runs"), refresh("alerts"), refresh("gates"), refresh("versions"),
+        ]).then((results) => results.every(Boolean));
+      }
       return refresh(state.activeTab);
     }
 
@@ -1643,10 +1750,6 @@
     }
 
     function activateSummary(tabId, filters) {
-      state.selected = {
-        resource: tabId,
-        filters: clone(filters || {}),
-      };
       if (tabId === "elements") {
         state.elements.filters = normalizedElementFilters(filters || {});
         state.elements.page = 1;
@@ -1656,466 +1759,420 @@
       return activateTab(tabId);
     }
 
-    function invalidateElementWorkspace() {
-      workspaceGeneration += 1;
-      if (elementRequestTimer !== null && typeof deps.clearTimeout === "function") {
-        deps.clearTimeout(elementRequestTimer);
+    function stopPickerPolling() {
+      if (pickerTimer !== null && typeof deps.clearTimeout === "function") {
+        deps.clearTimeout(pickerTimer);
       }
-      elementRequestTimer = null;
-      cancelPending("elementRequest");
-      return workspaceGeneration;
+      pickerTimer = null;
     }
 
-    function replaceElementWorkspace(value) {
-      invalidateElementWorkspace();
-      state.selected = value
-        ? Object.assign({}, value, {workspaceGeneration})
-        : null;
-      return workspaceGeneration;
-    }
-
-    function currentElementWorkspace(generation, requestId) {
+    function schedulePickerPoll() {
+      stopPickerPolling();
+      const session = state.picker?.session;
       if (
         destroyed
-        || !state.selected
-        || state.selected.workspaceGeneration !== generation
-      ) return false;
-      if (
-        requestId
-        && state.selected.request?.request_id !== requestId
-      ) return false;
-      return true;
+        || !session?.session_id
+        || !["starting", "ready", "selecting"].includes(session.status)
+        || typeof deps.setTimeout !== "function"
+      ) return;
+      const delay = deps.documentVisible?.() === false
+        ? PICKER_HIDDEN_POLL_INTERVAL_MS
+        : PICKER_POLL_INTERVAL_MS;
+      pickerTimer = deps.setTimeout(pollLivePicker, delay);
     }
 
-    function openElementWizard() {
+    async function openLivePicker() {
       if (!canCreateElement(state.session)) return false;
-      replaceElementWorkspace({
-        kind: "wizard",
-        step: 1,
-        detail: null,
-        suggestion: null,
-        repairs: [],
-        validation: null,
-        request: null,
-        validationReady: false,
-        probeCompletedRevision: null,
-        migrationDraft: false,
+      stopPickerPolling();
+      state.picker = {
+        open: true,
+        loading: true,
+        profiles: [],
+        profileRef: "",
+        pageState: "feed_ready",
+        session: null,
+        excludedSelectionIds: [],
+        selectedIds: [],
+        names: {},
+        filters: {type: "all", region: "all", locatable: false, search: ""},
         error: "",
-      });
-      render("element-workspace");
-      return true;
-    }
-
-    function openDiscoveryCandidate(raw) {
-      if (!openElementWizard()) return false;
-      const candidate = sanitizeDiscovery(raw);
-      const label = candidate.name || candidate.role || "discovered element";
-      state.selected.form = {
-        displayName: label,
-        intent: `locate ${label}`,
-        requiredState: candidate.page_state,
-        scope: candidate.scope,
-        probeAction: (
-          candidate.page_state === "feed_ready"
-          && candidate.attributes["data-e2e"] === "comment-icon"
-        ) ? "open_read_only" : "inspect_only",
-        acceptedRoles: candidate.role ? [candidate.role] : [],
-        acceptedNames: candidate.name ? [candidate.name] : [],
-        preferredAttributes: Object.keys(candidate.attributes),
-        nameMode: "exact",
-        postcondition: (
-          candidate.attributes["data-e2e"] === "comment-icon"
-            ? "comment_panel_open"
-            : ""
-        ),
       };
-      state.selected.suggestion = sanitizeProbeSuggestion({
-        role: candidate.role,
-        name: candidate.name,
-        stable_attributes: Object.entries(candidate.attributes).map(
-          ([name, value]) => ({name, value}),
-        ),
-        candidates: candidate.recommended_locators,
-      });
-      render("element-workspace");
-      return true;
-    }
-
-    function closeElementWorkspace() {
-      invalidateElementWorkspace();
-      state.selected = null;
-      render("element-workspace");
-      return true;
-    }
-
-    function setElementWizardStep(step) {
-      if (state.selected?.kind !== "wizard") return false;
-      const selected = Math.min(Math.max(Number(step) || 1, 1), 3);
-      if (selected === 3 && !canCreateElement(state.session)) return false;
-      state.selected.step = selected;
-      render("element-workspace");
-      return true;
-    }
-
-    async function createElementDraft(form) {
-      if (!canCreateElement(state.session) || state.selected?.kind !== "wizard") {
-        return false;
-      }
-      const selected = state.selected;
-      const generation = selected.workspaceGeneration;
-      let payload;
-      try {
-        payload = serializeSemanticContract(form);
-      } catch (error) {
-        if (!currentElementWorkspace(generation)) return false;
-        selected.error = error.message;
-        render("element-workspace");
-        return false;
-      }
-      const migrationDraft = selected.migrationDraft === true;
-      const detail = selected.detail;
-      const contract = {
-        intent: payload.intent,
-        required_state: payload.required_state,
-        scope: payload.scope,
-        probe_action: payload.probe_action,
-        accepted_roles: payload.accepted_roles || ["button"],
-        accepted_names: {
-          mode: payload.name_mode || "exact",
-          values: payload.accepted_names || [payload.display_name],
-        },
-        preferred_attributes: (
-          payload.preferred_attributes || ["data-e2e", "aria-label"]
-        ),
-        postcondition: payload.postcondition || "",
-      };
-      const result = migrationDraft
-        ? await request(
-          `/api/selector-probe/elements/${encodeURIComponent(detail?.id || "")}/draft`,
-          "PATCH",
-          {expected_revision: detail?.revision, contract},
-        )
-        : await request("/api/selector-probe/elements", "POST", payload);
-      if (!currentElementWorkspace(generation)) return false;
-      if (
-        (!migrationDraft && result.status !== 201)
-        || (migrationDraft && result.status !== 200)
-      ) {
-        selected.error = errorMessage(result, "创建元素草稿失败");
-        render("element-workspace");
-        return false;
-      }
-      selected.detail = sanitizeElementDetail(result.data);
-      selected.step = 2;
-      selected.migrationDraft = false;
-      selected.validationReady = false;
-      selected.probeCompletedRevision = null;
-      selected.error = "";
-      render("element-workspace");
-      return true;
-    }
-
-    function publicElementRequest(raw) {
-      const source = raw && typeof raw === "object" ? raw : {};
-      return {
-        request_id: safeText(source.request_id, 128),
-        request_type: safeCode(source.request_type),
-        element_id: safeText(source.element_id, 128),
-        status: safeCode(source.status) || "unknown",
-        attempt_count: Number(source.attempt_count) || 0,
-        error_code: safeCode(source.error_code),
-      };
-    }
-
-    async function pollElementRequest(requestId, expectedWorkspaceGeneration) {
-      const selectedRequest = safeText(requestId, 128);
-      const generation = (
-        expectedWorkspaceGeneration
-        ?? state.selected?.workspaceGeneration
-      );
-      if (
-        !selectedRequest
-        || !currentElementWorkspace(generation, selectedRequest)
-      ) return false;
-      cancelPending("elementRequest");
-      const requestGeneration = (generations.get("elementRequest") || 0) + 1;
-      generations.set("elementRequest", requestGeneration);
-      const controller = typeof deps.createAbortController === "function"
-        ? deps.createAbortController()
-        : null;
-      state.pending.set("elementRequest", {
-        generation: requestGeneration,
-        controller,
-        requestId: selectedRequest,
-        workspaceGeneration: generation,
-      });
+      render("picker");
       const result = await request(
-        `/api/selector-probe/element-requests/${encodeURIComponent(selectedRequest)}`,
-        "GET",
-        undefined,
-        controller ? {signal: controller.signal} : undefined,
+        "/api/selector-probe/settings/profiles", "GET",
       );
-      if (
-        generations.get("elementRequest") !== requestGeneration
-        || !currentElementWorkspace(generation, selectedRequest)
-      ) return false;
-      const selected = state.selected;
+      if (!state.picker?.open) return false;
       if (result.status !== 200) {
-        state.pending.delete("elementRequest");
-        selected.error = errorMessage(result, "读取请求状态失败");
-        render("element-workspace");
+        state.picker.loading = false;
+        state.picker.error = errorMessage(result, "读取测试 Profile 失败");
+        render("picker");
         return false;
       }
-      const publicRequest = publicElementRequest(result.data);
-      if (publicRequest.request_id !== selectedRequest) {
-        state.pending.delete("elementRequest");
+      const profiles = Array.isArray(result.data?.items)
+        ? result.data.items.filter((item) => (
+          item?.dedicated_test === true
+          && typeof item.profile_ref === "string"
+          && item.profile_ref
+        )).map((item) => ({
+          profile_ref: safeText(item.profile_ref, 128),
+          profile_mask: safeText(item.profile_mask, 32),
+          status: safeCode(item.status),
+        }))
+        : [];
+      state.picker.loading = false;
+      state.picker.profiles = profiles;
+      state.picker.profileRef = profiles[0]?.profile_ref || "";
+      state.picker.error = profiles.length ? "" : "没有可用的独立测试 Profile";
+      render("picker");
+      return profiles.length > 0;
+    }
+
+    async function beginElementRebind(elementId) {
+      if (!canCreateElement(state.session)) return false;
+      const id = safeText(elementId, 128);
+      if (!state.elements.items.some((item) => item.id === id)) return false;
+      state.pendingRebindId = id;
+      state.activeTab = "collect";
+      const opened = await openLivePicker();
+      if (!opened) state.pendingRebindId = "";
+      return opened;
+    }
+
+    async function startLivePicker(form) {
+      const picker = state.picker;
+      if (!picker?.open || picker.session) return false;
+      const profileRef = String(
+        filterValue(form, "profileRef")
+        || picker.profileRef || "",
+      ).trim();
+      const pageState = String(
+        filterValue(form, "pageState")
+        || picker.pageState || "feed_ready",
+      ).trim();
+      if (!profileRef || !["feed_ready", "comment_panel_open"].includes(pageState)) {
+        picker.error = "请选择测试 Profile 和页面状态";
+        render("picker");
         return false;
       }
-      selected.request = publicRequest;
-      if ([
-        "pending",
-        "processing",
-        "retrying",
-        "publishing",
-      ].includes(publicRequest.status)) {
-        state.pending.delete("elementRequest");
-        if (typeof deps.setTimeout === "function") {
-          elementRequestTimer = deps.setTimeout(
-            () => {
-              elementRequestTimer = null;
-              return pollElementRequest(selectedRequest, generation);
-            },
-            1000,
-          );
+      picker.loading = true;
+      picker.error = "";
+      picker.profileRef = profileRef;
+      picker.pageState = pageState;
+      render("picker");
+      const result = await request(
+        "/api/selector-probe/picker/start",
+        "POST",
+        {profile_ref: profileRef, page_state: pageState},
+      );
+      if (!state.picker?.open) return false;
+      picker.loading = false;
+      if (result.status !== 202) {
+        picker.error = errorMessage(result, "启动实时拾取失败");
+        render("picker");
+        return false;
+      }
+      picker.session = sanitizePickerSession(result.data);
+      render("picker");
+      schedulePickerPoll();
+      return true;
+    }
+
+    async function pollLivePicker() {
+      pickerTimer = null;
+      const picker = state.picker;
+      const sessionId = picker?.session?.session_id;
+      if (!picker?.open || !sessionId) return false;
+      const result = await request(
+        `/api/selector-probe/picker/${encodeURIComponent(sessionId)}`,
+        "GET",
+      );
+      if (!state.picker?.open || state.picker.session?.session_id !== sessionId) {
+        return false;
+      }
+      if (result.status !== 200) {
+        picker.error = errorMessage(result, "读取拾取状态失败");
+        render("picker");
+        schedulePickerPoll();
+        return false;
+      }
+      picker.session = sanitizePickerSession(result.data);
+      if (picker.session.failure_code) picker.error = picker.session.failure_code;
+      render("picker");
+      schedulePickerPoll();
+      return true;
+    }
+
+    function removeLivePickerSelection(selectionId) {
+      const picker = state.picker;
+      if (!picker?.session) return false;
+      const selected = safeText(selectionId, 64);
+      if (!selected) return false;
+      picker.excludedSelectionIds = Array.from(new Set([
+        ...(picker.excludedSelectionIds || []),
+        selected,
+      ]));
+      render("picker");
+      return true;
+    }
+
+    function setCollectorSelection(selectionId, selected) {
+      const picker = state.picker;
+      const id = safeText(selectionId, 64);
+      if (!picker || !id) return false;
+      const ids = new Set(picker.selectedIds || []);
+      if (selected) ids.add(id);
+      else ids.delete(id);
+      picker.selectedIds = Array.from(ids).slice(0, 20);
+      render("picker");
+      return true;
+    }
+
+    function setCollectorName(selectionId, displayName) {
+      const picker = state.picker;
+      const id = safeText(selectionId, 64);
+      if (!picker || !id) return false;
+      picker.names[id] = safeText(displayName, 120);
+      return true;
+    }
+
+    function setCollectorFilters(filters) {
+      if (!state.picker) return false;
+      state.picker.filters = Object.assign({}, state.picker.filters, filters || {});
+      render("picker");
+      return true;
+    }
+
+    function includedPickerSelections() {
+      const picker = state.picker;
+      const excluded = new Set(picker?.excludedSelectionIds || []);
+      return (picker?.session?.inventory || picker?.session?.selections || []).filter(
+        (item) => item.selection_id && !excluded.has(item.selection_id),
+      );
+    }
+
+    async function confirmLivePicker(rawSelections) {
+      const picker = state.picker;
+      const session = picker?.session;
+      let namedSelections;
+      try {
+        namedSelections = inventoryUI.serializeNamedSelections(rawSelections || []);
+      } catch (_error) {
+        namedSelections = [];
+      }
+      if (!session?.session_id || !namedSelections.length) {
+        if (picker) picker.error = "请至少选择一个元素并填写不重复的名称";
+        render("picker");
+        return false;
+      }
+      const rebindId = state.pendingRebindId;
+      if (rebindId && namedSelections.length !== 1) {
+        picker.error = "重新绑定时只能选择一个元素";
+        render("picker");
+        return false;
+      }
+      const inventoryById = new Map(
+        (session.inventory || []).map((item) => [item.selection_id, item]),
+      );
+      picker.loading = true;
+      render("picker");
+      const result = await request(
+        `/api/selector-probe/picker/${encodeURIComponent(session.session_id)}/confirm`,
+        "POST",
+        {
+          expected_revision: session.revision,
+          selections: namedSelections,
+        },
+      );
+      if (!state.picker?.open) return false;
+      picker.loading = false;
+      if (result.status !== 200) {
+        picker.error = errorMessage(result, "确认拾取结果失败");
+        render("picker");
+        return false;
+      }
+      stopPickerPolling();
+      const confirmed = sanitizePickerSession(result.data);
+      const targetOrigin = state.settings?.target_origin || "https://www.tiktok.com";
+      const recordedSteps = confirmed.recorded_steps.length
+        ? confirmed.recorded_steps
+        : session.recorded_steps;
+      const failures = [];
+      for (const named of namedSelections) {
+        const item = inventoryById.get(named.selection_id);
+        if (!item || !item.locators?.length) {
+          failures.push(named.display_name);
+          continue;
         }
-        render("element-workspace");
+        const definition = {
+          page_key: `tiktok.${session.page_state || "page"}`,
+          target_origin: targetOrigin,
+          url_pattern: `${targetOrigin}/*`,
+          operation_steps: recordedSteps.filter((step) => step.locator),
+          fingerprint: {
+            tag: item.tag,
+            input_type: item.input_type,
+            role: item.role,
+            name: item.name,
+            attributes: item.attributes,
+            region: item.region,
+            page_region: item.page_region,
+            frame_key: item.frame_key,
+            shadow: item.shadow,
+          },
+          locators: item.locators.map(({type, value}) => ({type, value})),
+        };
+        let saved;
+        if (rebindId) {
+          const existing = state.elements.items.find((entry) => entry.id === rebindId);
+          saved = await request(
+            `/api/selector-probe/elements/${encodeURIComponent(rebindId)}`,
+            "PATCH",
+            {
+              operation: "rebind",
+              definition,
+              expected_revision: Number(existing?.revision),
+            },
+          );
+          if (saved.status === 200 && named.display_name !== existing?.display_name) {
+            saved = await request(
+              `/api/selector-probe/elements/${encodeURIComponent(rebindId)}`,
+              "PATCH",
+              {
+                operation: "rename",
+                display_name: named.display_name,
+                expected_revision: Number(saved.data?.revision),
+              },
+            );
+          }
+        } else {
+          saved = await request("/api/selector-probe/elements", "POST", {
+            display_name: named.display_name,
+            ...definition,
+          });
+        }
+        if (![200, 201].includes(saved.status)) failures.push(named.display_name);
+      }
+      state.picker = null;
+      state.pendingRebindId = "";
+      state.status = failures.length
+        ? {kind: "error", message: `以下元素保存失败：${failures.join("、")}`}
+        : {kind: "success", message: rebindId
+          ? "元素已重新绑定，等待双 Profile 双轮验证"
+          : `已保存 ${namedSelections.length} 个待验证元素`};
+      state.activeTab = "managed";
+      await refresh("elements");
+      render("managed");
+      return failures.length === 0;
+    }
+
+    async function cancelLivePicker() {
+      const picker = state.picker;
+      const session = picker?.session;
+      stopPickerPolling();
+      state.picker = null;
+      state.pendingRebindId = "";
+      render("picker");
+      if (!session?.session_id || !["starting", "ready", "selecting"].includes(session.status)) {
         return true;
       }
-      if (publicRequest.status === "completed") {
-        if (publicRequest.request_type === "probe") {
-          const probeResult = result.data?.result || {};
-          const candidate = probeResult.candidate || {};
-          const locators = Array.isArray(candidate.locators)
-            ? candidate.locators
-            : probeResult.suggestion?.candidates;
-          const roleLocator = (locators || []).find(
-            (locator) => locator?.type === "role",
-          );
-          selected.suggestion = sanitizeProbeSuggestion({
-            ...(probeResult.suggestion || {}),
-            role: probeResult.suggestion?.role || roleLocator?.role,
-            name: probeResult.suggestion?.name || roleLocator?.name,
-            stable_attributes: (
-              probeResult.suggestion?.stable_attributes
-              || (locators || [])
-                .filter((locator) => locator?.type === "attribute")
-                .map((locator) => ({
-                  name: locator.name,
-                  value: locator.value,
-                }))
-            ),
-            candidates: locators,
-            llm_used: (
-              probeResult.suggestion?.llm_used === true
-              || (probeResult.repairs || []).length > 0
-            ),
-          });
-          selected.repairs = sanitizeRepairs(probeResult.repairs);
-          selected.step = 2;
-        } else if (publicRequest.request_type === "validate") {
-          const validation = result.data?.result?.validation || result.data?.result || {};
-          const rounds = Array.isArray(validation.rounds)
-            ? validation.rounds.map(safeValidationRound).filter(Boolean)
-            : [];
-          selected.validation = {
-            status: safeCode(validation.status) || "unknown",
-            rounds,
-            summary: summarizeValidation(rounds),
-            version_id: safeText(
-              validation.version_id
-              || validation.new_version
-              || validation.version,
-              128,
-            ),
-          };
-          selected.step = 3;
-        }
-      }
-      const elementId = selected.detail?.id || publicRequest.element_id;
-      if (!elementId) {
-        state.pending.delete("elementRequest");
-        selected.validationReady = false;
-        selected.error = "请求完成，但无法刷新元素版本";
-        render("element-workspace");
-        return false;
-      }
-      const detailResult = await request(
-        `/api/selector-probe/elements/${encodeURIComponent(elementId)}`,
-        "GET",
-        undefined,
-        controller ? {signal: controller.signal} : undefined,
+      await request(
+        `/api/selector-probe/picker/${encodeURIComponent(session.session_id)}/cancel`,
+        "POST",
+        {expected_revision: session.revision},
       );
-      if (
-        generations.get("elementRequest") !== requestGeneration
-        || !currentElementWorkspace(generation, selectedRequest)
-      ) return false;
-      state.pending.delete("elementRequest");
-      if (detailResult.status !== 200) {
-        selected.validationReady = false;
-        selected.error = errorMessage(detailResult, "刷新元素版本失败");
-        render("element-workspace");
-        return false;
-      }
-      selected.detail = sanitizeElementDetail(detailResult.data);
-      selected.validationReady = (
-        publicRequest.request_type === "probe"
-        && publicRequest.status === "completed"
-      );
-      selected.probeCompletedRevision = selected.validationReady
-        ? selected.detail.revision
-        : null;
-      if (publicRequest.status !== "completed") {
-        selected.error = publicRequest.error_code || "元素请求未完成";
-      }
-      render("element-workspace");
       return true;
     }
 
-    async function startElementRequest(requestType) {
-      const selected = state.selected;
-      const element = selected?.detail;
-      if (!element?.id) return false;
-      const generation = selected.workspaceGeneration;
-      if (requestType === "validate" && !canCreateElement(state.session)) {
-        return false;
-      }
-      if (
-        requestType === "validate"
-        && (
-          selected.validationReady !== true
-          || selected.probeCompletedRevision !== element.revision
-        )
-      ) return false;
-      const expectedRevision = Number(element.revision);
-      if (!Number.isInteger(expectedRevision) || expectedRevision < 0) return false;
+    async function renameElement(elementId, displayName, expectedRevision) {
+      if (!canCreateElement(state.session)) return false;
+      const id = safeText(elementId, 128);
+      const name = safeText(displayName, 120).trim();
+      if (!id || !name) return false;
       const result = await request(
-        `/api/selector-probe/elements/${encodeURIComponent(element.id)}/${requestType}`,
-        "POST",
-        {expected_revision: expectedRevision},
+        `/api/selector-probe/elements/${encodeURIComponent(id)}`,
+        "PATCH",
+        {
+          operation: "rename",
+          display_name: name,
+          expected_revision: Number(expectedRevision),
+        },
       );
-      if (!currentElementWorkspace(generation)) return false;
-      if (result.status !== 202) {
-        selected.error = errorMessage(result, `${requestType} 请求失败`);
-        render("element-workspace");
+      if (result.status !== 200) {
+        state.status = {kind: "error", message: errorMessage(result, "重命名失败")};
+        render("managed");
         return false;
       }
-      selected.request = publicElementRequest({
-        ...result.data,
-        request_type: requestType,
-        element_id: element.id,
-      });
-      const managedRevision = Number(result.data?.expected_revision);
-      if (Number.isInteger(managedRevision) && managedRevision >= 0) {
-        selected.detail.revision = managedRevision;
+      await refresh("elements");
+      return true;
+    }
+
+    async function rebindElement(elementId, definition, expectedRevision) {
+      if (!canCreateElement(state.session)) return false;
+      const id = safeText(elementId, 128);
+      if (!id || !definition || typeof definition !== "object") return false;
+      const result = await request(
+        `/api/selector-probe/elements/${encodeURIComponent(id)}`,
+        "PATCH",
+        {
+          operation: "rebind",
+          definition,
+          expected_revision: Number(expectedRevision),
+        },
+      );
+      if (result.status !== 200) {
+        state.status = {kind: "error", message: errorMessage(result, "重新绑定失败")};
+        render("managed");
+        return false;
       }
-      selected.validationReady = false;
-      selected.probeCompletedRevision = null;
-      if (requestType === "validate") selected.step = 3;
-      selected.error = "";
-      render("element-workspace");
-      return pollElementRequest(result.data.request_id, generation);
+      await refresh("elements");
+      return true;
     }
 
-    function requestElementProbe() {
-      return startElementRequest("probe");
+    async function deleteElement(elementId, expectedRevision) {
+      if (!canCreateElement(state.session)) return false;
+      const id = safeText(elementId, 128);
+      const summary = state.elements.items.find((item) => item.id === id);
+      if (!id || Number(summary?.dependency_count) > 0) {
+        state.status = {kind: "error", message: "该元素仍被策略引用，请先移除引用"};
+        render("managed");
+        return false;
+      }
+      const result = await request(
+        `/api/selector-probe/elements/${encodeURIComponent(id)}`,
+        "DELETE",
+        {expected_revision: Number(expectedRevision)},
+      );
+      if (result.status !== 204) {
+        state.status = {kind: "error", message: errorMessage(result, "删除元素失败")};
+        render("managed");
+        return false;
+      }
+      await refresh("elements");
+      return true;
     }
 
-    function requestElementValidation() {
-      return startElementRequest("validate");
-    }
-
-    async function openElementDetail(elementId) {
+    async function openManagedElementDetail(elementId) {
       const id = safeText(elementId, 128);
       if (!id) return false;
-      const generation = invalidateElementWorkspace();
+      const generation = replaceOperationWorkspace({
+        kind: "element-detail",
+        detail: sanitizeElementDetail({id}),
+        error: "",
+        busy: true,
+      });
       const result = await request(
         `/api/selector-probe/elements/${encodeURIComponent(id)}`,
         "GET",
       );
-      if (destroyed || generation !== workspaceGeneration || result.status !== 200) {
-        return false;
-      }
-      state.selected = {
-        kind: "detail",
-        activeDetailTab: "evidence",
-        detail: sanitizeElementDetail(result.data),
-        request: null,
-        validation: null,
-        validationReady: false,
-        probeCompletedRevision: null,
-        error: "",
-        workspaceGeneration: generation,
-      };
-      render("element-workspace");
-      return true;
-    }
-
-    function activateElementDetailTab(tabId) {
-      if (!DETAIL_TABS.includes(tabId) || state.selected?.kind !== "detail") {
-        return false;
-      }
-      state.selected.activeDetailTab = tabId;
-      render("element-workspace");
-      return true;
-    }
-
-    function openLegacyMigration(element) {
-      if (!canCreateElement(state.session)) return false;
-      const detail = sanitizeElementDetail(element);
-      if (detail.migration_available !== true) return false;
-      replaceElementWorkspace({
-        kind: "migration",
-        detail,
-        safetyCopy: migrationSafetyCopy(),
-        error: "",
-      });
-      render("element-workspace");
-      return true;
-    }
-
-    async function requestLegacyMigration() {
-      if (
-        !canCreateElement(state.session)
-        || state.selected?.kind !== "migration"
-      ) return false;
-      const selected = state.selected;
-      const generation = selected.workspaceGeneration;
-      const detail = selected.detail;
-      const result = await request(
-        `/api/selector-probe/elements/${encodeURIComponent(detail.id)}/migrate`,
-        "POST",
-        {expected_revision: detail.revision},
-      );
-      if (!currentElementWorkspace(generation)) return false;
+      if (!currentOperation(generation, "element-detail")) return false;
+      state.operationWorkspace.busy = false;
       if (result.status !== 200) {
-        selected.error = errorMessage(result, "加入自动管理失败");
-        render("element-workspace");
+        state.operationWorkspace.error = errorMessage(result, "元素详情不可用");
+        render("operation-workspace");
         return false;
       }
-      replaceElementWorkspace({
-        kind: "wizard",
-        step: 1,
-        detail: sanitizeElementDetail(result.data),
-        suggestion: null,
-        repairs: [],
-        request: null,
-        validation: null,
-        validationReady: false,
-        probeCompletedRevision: null,
-        migrationDraft: true,
-        error: "",
-      });
-      render("element-workspace");
+      state.operationWorkspace.detail = sanitizeElementDetail(result.data);
+      render("operation-workspace");
       return true;
     }
 
@@ -2344,7 +2401,7 @@
         || result.data?.request_id,
         128,
       );
-      state.activeTab = "runs";
+      state.activeTab = "operations";
       if (result.status === 409 && operationError(result, "") === "probe_busy") {
         if (activeRunId) {
           return openRunDetail(activeRunId, {error: "probe_busy"});
@@ -2579,11 +2636,19 @@
       return true;
     }
 
+    async function acknowledgeAlert(alertId) {
+      const selectedId = Number(alertId);
+      const alert = state.alerts.items.find(
+        (item) => Number(item.id) === selectedId,
+      );
+      if (!alert || !confirmAlertAction(alert, "acknowledge")) return false;
+      return submitAlertAction("");
+    }
+
     function writeOnlySettings(raw) {
       const source = raw && typeof raw === "object" ? raw : {};
       const result = {};
       for (const name of [
-        "model_api_key",
         "redis_password",
         "webhook_signing_secret",
         "webhook_url",
@@ -2592,67 +2657,6 @@
         if (value) result[name] = value;
       }
       return result;
-    }
-
-    async function requestSettingsPreflight(raw) {
-      if (state.session?.role !== "administrator" || !state.settings) {
-        return false;
-      }
-      if (state.settingsDraftStale) {
-        state.settingsStatus = "settings_draft_stale_reload_required";
-        render("settings");
-        return false;
-      }
-      const candidate = sanitizeSettings(raw);
-      const baseRevision = Number.isInteger(state.settingsDraftBaseRevision)
-        ? state.settingsDraftBaseRevision
-        : state.settings.revision;
-      const candidateFingerprint = settingsFingerprint(candidate);
-      state.settingsStatus = "preflight_running";
-      render("settings");
-      const result = await request(
-        "/api/selector-probe/settings/preflight",
-        "POST",
-        {
-          expected_revision: baseRevision,
-          candidate_fingerprint: candidateFingerprint,
-          settings: settingsMutationPayload(candidate),
-        },
-      );
-      if (result.status !== 200) {
-        state.settingsPreflight = null;
-        settingsPreflightBinding = null;
-        state.settingsStatus = operationError(
-          result,
-          "settings_preflight_unavailable",
-        );
-        render("settings");
-        return false;
-      }
-      const preflight = sanitizePreflight(result.data);
-      const validBinding = (
-        preflight.base_revision === baseRevision
-        && preflight.candidate_fingerprint === candidateFingerprint
-        && Boolean(preflight.preflight_token)
-        && Boolean(preflight.checked_at)
-      );
-      if (!validBinding) {
-        state.settingsPreflight = null;
-        settingsPreflightBinding = null;
-        state.settingsStatus = "settings_preflight_binding_invalid";
-        render("settings");
-        return false;
-      }
-      state.settingsPreflight = preflight;
-      settingsPreflightBinding = {
-        baseRevision,
-        candidateFingerprint,
-        preflightToken: preflight.preflight_token,
-        checkedAt: preflight.checked_at,
-      };
-      state.settingsStatus = state.settingsPreflight.status;
-      render("settings");
-      return preflightPassed(state.settingsPreflight);
     }
 
     function confirmSettingsSave(raw, reason, secrets) {
@@ -2673,23 +2677,10 @@
       }
       const candidate = sanitizeSettings(raw);
       const selectedReason = safeText(reason, 500).trim();
-      const preflightMatches = (
-        settingsPreflightBinding
-        && settingsPreflightBinding.baseRevision === state.settings.revision
-        && settingsPreflightBinding.candidateFingerprint
-          === settingsFingerprint(candidate)
-        && settingsPreflightBinding.preflightToken
-          === state.settingsPreflight?.preflight_token
-        && settingsPreflightBinding.checkedAt
-          === state.settingsPreflight?.checked_at
-      );
       const validation = validateSettingsSave(
         state.settings,
         candidate,
-        {
-          reason: selectedReason,
-          preflight: preflightMatches ? state.settingsPreflight : null,
-        },
+        {reason: selectedReason},
       );
       const privateChanges = writeOnlySettings(secrets);
       if (
@@ -2700,10 +2691,6 @@
         if (!selectedReason && !validation.errors.includes("reason_required")) {
           validation.errors.push("reason_required");
         }
-        if (
-          candidate.rollout_mode === "enforce"
-          && !validation.errors.includes("preflight_failed")
-        ) validation.errors.push("preflight_failed");
       }
       const blockingErrors = validation.errors.filter(
         (error) => error !== "reason_required",
@@ -2726,13 +2713,8 @@
           : "确认保存设置。",
         error: "",
         busy: false,
-        baseRevision: settingsPreflightBinding?.baseRevision
-          ?? state.settingsDraftBaseRevision
+        baseRevision: state.settingsDraftBaseRevision
           ?? state.settings.revision,
-        candidateFingerprint: settingsPreflightBinding?.candidateFingerprint
-          || settingsFingerprint(candidate),
-        preflightToken: settingsPreflightBinding?.preflightToken || "",
-        preflightCheckedAt: settingsPreflightBinding?.checkedAt || "",
       });
       return true;
     }
@@ -2762,11 +2744,6 @@
         idempotency_key: idempotencyKey("settings-save", "settings"),
         settings: settingsMutationPayload(workspace.detail),
       };
-      if (workspace.preflightToken) {
-        body.preflight_token = workspace.preflightToken;
-        body.candidate_fingerprint = workspace.candidateFingerprint;
-        body.preflight_checked_at = workspace.preflightCheckedAt;
-      }
       const privateChanges = clone(pendingSettingsSecrets);
       if (pendingProfileAdds.length) {
         body.profile_changes = {add: clone(pendingProfileAdds)};
@@ -2793,8 +2770,6 @@
       state.settingsDraft = null;
       state.settingsDraftBaseRevision = null;
       state.settingsDraftStale = false;
-      state.settingsPreflight = null;
-      settingsPreflightBinding = null;
       pendingProfileAdds = [];
       state.settingsProfileAdds = [];
       state.settingsStatus = "settings_saved";
@@ -2888,7 +2863,6 @@
         state.session?.role !== "administrator"
         || !state.settings
         || ![
-          "model_api_key",
           "redis_password",
           "webhook_signing_secret",
         ].includes(name)
@@ -3160,7 +3134,9 @@
     }
 
     async function activateTab(tabId) {
-      if (!TAB_IDS.has(tabId)) throw new Error(`unknown selector probe tab: ${tabId}`);
+      if (!TAB_IDS.has(tabId) && !AVAILABLE_ROUTES[tabId]) {
+        throw new Error(`unknown selector probe tab: ${tabId}`);
+      }
       state.activeTab = tabId;
       render("tab");
       const refreshed = await refreshCurrent();
@@ -3181,6 +3157,11 @@
     async function pollVisibleResources() {
       if (destroyed || !documentIsVisible()) return false;
       const resources = new Set(["overview", "gates", "alerts"]);
+      if (state.activeTab === "managed") resources.add("elements");
+      if (state.activeTab === "operations") {
+        resources.add("runs");
+        resources.add("versions");
+      }
       if (AVAILABLE_ROUTES[state.activeTab]) resources.add(state.activeTab);
       await Promise.all(Array.from(resources).map((resource) => refresh(resource)));
       return true;
@@ -3225,17 +3206,17 @@
 
     function destroy() {
       destroyed = true;
+      stopPickerPolling();
       stopRunDetailPolling();
-      invalidateElementWorkspace();
       state.selected = null;
+      state.picker = null;
+      state.pendingRebindId = "";
       state.operationWorkspace = null;
       state.temporaryCredential = null;
       state.settingsDraft = null;
       state.settingsDraftBaseRevision = null;
       state.settingsDraftStale = false;
-      state.settingsPreflight = null;
       state.settingsStatus = "";
-      settingsPreflightBinding = null;
       pendingSettingsSecrets = {};
       pendingProfileAdds = [];
       state.settingsProfileAdds = [];
@@ -3285,18 +3266,23 @@
       setElementPage,
       setElementPageSize,
       activateSummary,
-      openElementWizard,
-      openDiscoveryCandidate,
-      closeElementWorkspace,
-      setElementWizardStep,
-      createElementDraft,
-      requestElementProbe,
-      requestElementValidation,
-      pollElementRequest,
-      openElementDetail,
-      activateElementDetailTab,
-      openLegacyMigration,
-      requestLegacyMigration,
+      openLivePicker,
+      openCollector: openLivePicker,
+      beginElementRebind,
+      startLivePicker,
+      pollLivePicker,
+      pollCollector: pollLivePicker,
+      removeLivePickerSelection,
+      setCollectorSelection,
+      setCollectorName,
+      setCollectorFilters,
+      confirmLivePicker,
+      confirmCollector: confirmLivePicker,
+      cancelLivePicker,
+      renameElement,
+      rebindElement,
+      deleteElement,
+      openManagedElementDetail,
       closeOperationWorkspace,
       confirmManualGate,
       submitManualGate,
@@ -3309,7 +3295,7 @@
       openAlertDetail,
       confirmAlertAction,
       submitAlertAction,
-      requestSettingsPreflight,
+      acknowledgeAlert,
       stageSettingsDraft,
       reloadSettingsDraft,
       confirmSettingsSave,
@@ -3598,6 +3584,8 @@
     const elements = state?.elements || listState(true);
     const addButton = document.querySelector("#selector-element-add");
     if (addButton) addButton.hidden = !canCreateElement(state?.session);
+    const pickerButton = document.querySelector("#selector-element-picker");
+    if (pickerButton) pickerButton.hidden = !canCreateElement(state?.session);
     renderElementCounts(document, state || {});
 
     const rows = document.querySelector("#selector-element-rows");
@@ -3687,6 +3675,153 @@
     }
   }
 
+  function renderLivePicker(document, state) {
+    const picker = state?.picker;
+    const dialog = document.querySelector("#selector-element-picker-dialog");
+    openDialogForState(dialog, Boolean(picker?.open));
+    if (!picker?.open) return;
+    const profile = document.querySelector("#selector-picker-profile");
+    if (profile) {
+      const current = picker.profileRef || profile.value;
+      profile.replaceChildren(...(picker.profiles || []).map((item) => {
+        const option = document.createElement("option");
+        option.value = item.profile_ref;
+        option.textContent = `${item.profile_mask || "***"} · ${item.status || "unknown"}`;
+        return option;
+      }));
+      profile.value = current || picker.profiles?.[0]?.profile_ref || "";
+      profile.disabled = Boolean(picker.session) || picker.loading === true;
+    }
+    const pageState = document.querySelector("#selector-picker-page-state");
+    if (pageState) {
+      pageState.value = picker.pageState || "feed_ready";
+      pageState.disabled = Boolean(picker.session) || picker.loading === true;
+    }
+    const session = picker.session;
+    const labels = {
+      starting: "正在准备测试环境",
+      ready: "页面已就绪，可以点击元素",
+      selecting: "正在选择元素",
+      confirmed: "已确认，正在清理",
+      cancelled: "已取消",
+      expired: "会话已超时",
+      failed: "拾取失败",
+    };
+    setNodeText(
+      document,
+      "selector-picker-status",
+      session ? (labels[session.status] || session.status) : (
+        picker.loading ? "正在读取测试 Profile" : "请选择 Profile 和页面状态"
+      ),
+    );
+    const inventory = session?.inventory || [];
+    const selectedIds = new Set(picker.selectedIds || []);
+    const selections = inventory.filter(
+      (item) => selectedIds.has(item.selection_id),
+    );
+    setNodeText(
+      document,
+      "selector-picker-count",
+      `${inventory.length} 个候选 · 已选 ${selections.length} / ${session?.max_selections || 20}`,
+    );
+    const inventoryList = document.querySelector("#selector-inventory-list");
+    inventoryUI?.renderInventory(document, inventoryList, inventory, {
+      filters: picker.filters,
+      selectedIds: picker.selectedIds,
+      names: picker.names,
+    });
+    const recordedSteps = document.querySelector("#selector-inventory-recorded-steps");
+    recordedSteps?.replaceChildren(...(
+      session?.recorded_steps?.length
+        ? session.recorded_steps.map((step) => createTextElement(
+          document,
+          "article",
+          `${step.sequence}. ${locatorDescription(step.locator || {})}`,
+          "selector-detail-row",
+        ))
+        : [createTextElement(document, "p", "尚未记录点击步骤", "muted")]
+    ));
+    const locatorRows = document.querySelector("#selector-inventory-locators");
+    locatorRows?.replaceChildren(...(
+      selections.flatMap((item) => item.locators.map((locator) => createTextElement(
+        document,
+        "code",
+        `${item.name || item.tag}: ${locator.type.toUpperCase()} ${locator.value}`,
+        "selector-detail-row",
+      )))
+    ));
+    setNodeText(
+      document,
+      "selector-inventory-selected-summary",
+      selections.length
+        ? `将保存 ${selections.length} 个元素；当前窗口已完成路径 Dry-Run。`
+        : "勾选元素并填写自定义名称。",
+    );
+    const list = document.querySelector("#selector-picker-selections");
+    if (list) {
+      list.replaceChildren(...(
+        selections.length
+          ? selections.map((item, index) => {
+            const row = document.createElement("article");
+            row.className = "selector-picker-selection";
+            const copy = document.createElement("div");
+            copy.append(
+              createTextElement(
+                document,
+                "strong",
+                item.name || item.attributes?.["data-e2e"] || item.role || `元素 ${index + 1}`,
+              ),
+              createTextElement(
+                document,
+                "span",
+                `${item.role || item.tag || "control"} · ${item.scope || "page"}`,
+                "muted",
+              ),
+              createTextElement(
+                document,
+                "code",
+                item.recommended_locators?.[0]
+                  ? JSON.stringify(item.recommended_locators[0])
+                  : "等待生成 Locator",
+              ),
+            );
+            const remove = createTextElement(document, "button", "移除");
+            remove.type = "button";
+            remove.className = "secondary";
+            remove.dataset.selectorPickerRemove = item.selection_id;
+            row.append(copy, remove);
+            return row;
+          })
+          : [createTextElement(
+            document,
+            "p",
+            session ? "请在 AdsPower 窗口中点击要管理的元素" : "尚未启动",
+            "muted",
+          )]
+      ));
+    }
+    const start = document.querySelector("#selector-picker-start");
+    if (start) {
+      start.hidden = Boolean(session);
+      start.disabled = picker.loading === true || !(picker.profiles || []).length;
+    }
+    const confirm = document.querySelector("#selector-picker-confirm");
+    if (confirm) {
+      confirm.hidden = !session;
+      confirm.disabled = (
+        picker.loading === true
+        || !["ready", "selecting"].includes(session?.status)
+        || !selections.length
+        || selections.some((item) => !safeText(picker.names[item.selection_id], 120))
+      );
+    }
+    setNodeText(
+      document,
+      "selector-picker-error",
+      picker.error || session?.failure_code || "",
+    );
+  }
+
   function locatorDescription(locator) {
     if (locator.type === "role") {
       return `Role ${locator.role || "未知"} · Name ${locator.name || "未设置"} · ${locator.name_mode || "exact"}`;
@@ -3695,175 +3830,6 @@
       return `属性 ${locator.name || "未知"}=${locator.value || "未设置"}`;
     }
     return `${String(locator.type || "locator").toUpperCase()} ${locator.value || "未设置"}`;
-  }
-
-  function renderLocatorRows(document, containerId, groups) {
-    const container = document.querySelector(`#${containerId}`);
-    if (!container) return;
-    const rows = [];
-    groups.forEach(({label, items}) => {
-      (items || []).forEach((locator, index) => {
-        const row = document.createElement("article");
-        row.className = "selector-detail-row";
-        row.append(
-          createTextElement(document, "strong", `${label} ${index + 1}`),
-          createTextElement(document, "span", locatorDescription(locator)),
-          createTextElement(
-            document,
-            "span",
-            locator.fallback ? "↪ 回退候选" : "● 主候选",
-            "muted",
-          ),
-        );
-        rows.push(row);
-      });
-    });
-    if (!rows.length) {
-      const empty = document.createElement("article");
-      empty.className = "selector-detail-row";
-      empty.textContent = "暂无证据";
-      rows.push(empty);
-    }
-    container.replaceChildren(...rows);
-  }
-
-  function renderValidationMatrixInto(document, rounds, containerId) {
-    const container = document.querySelector(`#${containerId}`);
-    if (!container) return;
-    const safeRounds = (Array.isArray(rounds) ? rounds : [])
-      .map(safeValidationRound)
-      .filter(Boolean);
-    container.replaceChildren(
-      ...(safeRounds.length ? safeRounds.map((round) => {
-        const row = document.createElement("article");
-        row.className = "selector-validation-cell";
-        row.append(
-          createTextElement(
-            document,
-            "strong",
-            `${round.profile_mask} · 第 ${round.round} 轮`,
-          ),
-          createTextElement(
-            document,
-            "span",
-            `${round.status === "passed" ? "● 通过" : "■ 未通过"} · 匹配 ${round.match_count ?? "—"}`,
-          ),
-          createTextElement(
-            document,
-            "span",
-            [
-              round.role_name_result,
-              round.visibility_result,
-              round.actionability_result,
-              round.postcondition_result,
-              typeof round.visible === "boolean"
-                ? `可见 ${round.visible ? "通过" : "失败"}`
-                : "",
-              typeof round.in_viewport === "boolean"
-                ? `视口内 ${round.in_viewport ? "通过" : "失败"}`
-                : "",
-              typeof round.actionable === "boolean"
-                ? `可操作 ${round.actionable ? "通过" : "失败"}`
-                : "",
-              round.failure_code,
-            ].filter(Boolean).join(" · "),
-            "muted",
-          ),
-        );
-        return row;
-      }) : [createTextElement(document, "article", "暂无证据", "selector-validation-cell")]),
-    );
-  }
-
-  function renderValidationMatrix(document, rounds) {
-    renderValidationMatrixInto(
-      document,
-      rounds,
-      "selector-element-validation-matrix",
-    );
-  }
-
-  function renderElementDetail(document, detail) {
-    const safe = sanitizeElementDetail(detail);
-    setNodeText(document, "selector-element-detail-title", safe.display_name || "元素详情");
-    setNodeText(document, "selector-element-detail-alias", safe.id);
-    setNodeText(
-      document,
-      "selector-element-detail-status",
-      `${safe.published_status || "unknown"}${safe.draft_status ? ` · ${safe.draft_status}` : ""}`,
-    );
-    setNodeText(
-      document,
-      "selector-element-detail-version",
-      safe.active_version || "尚无版本",
-    );
-    setNodeText(
-      document,
-      "selector-element-detail-dependencies",
-      safe.dependency_count,
-    );
-    setNodeText(
-      document,
-      "selector-element-detail-last-validation",
-      safe.last_validated_at || "尚未验证",
-    );
-    renderLocatorRows(document, "selector-element-detail-evidence", [
-      {
-        label: "Active",
-        items: safe.candidate_comparison.active,
-      },
-    ]);
-    renderLocatorRows(document, "selector-element-detail-candidates", [
-      {label: "Active", items: safe.candidate_comparison.active},
-      {label: "Deterministic", items: safe.candidate_comparison.deterministic},
-      {label: "Repaired", items: safe.candidate_comparison.repaired},
-    ]);
-    const repairs = document.querySelector("#selector-element-detail-repairs");
-    if (repairs) {
-      repairs.replaceChildren(
-        ...(safe.repairs.length ? safe.repairs.map((repair) => {
-          const row = document.createElement("article");
-          row.className = "selector-detail-row";
-          row.append(
-            createTextElement(document, "strong", `修正尝试 ${repair.attempt}`),
-            createTextElement(
-              document,
-              "span",
-              `${repair.previous_method || "unknown"} → ${repair.new_method || "unknown"}`,
-            ),
-            createTextElement(
-              document,
-              "span",
-              `${repair.failure_code || "无失败代码"} · 匹配 ${repair.match_count ?? "—"} · ${repair.validation_result || "未验证"}`,
-              "muted",
-            ),
-            createTextElement(
-              document,
-              "span",
-              `${repair.prompt_version || "无 Prompt 版本"} · ${repair.model_id || "无模型 ID"}`,
-              "muted",
-            ),
-          );
-          return row;
-        }) : [createTextElement(document, "article", "暂无证据", "selector-detail-row")]),
-      );
-    }
-    const history = document.querySelector("#selector-element-detail-history");
-    if (history) {
-      history.replaceChildren(
-        ...(safe.history.length ? safe.history.map((version) => {
-          const button = document.createElement("button");
-          button.type = "button";
-          button.className = "selector-detail-row";
-          button.dataset.selectorSummaryTab = "versions";
-          button.dataset.selectorSummaryFilter = "element_id";
-          button.dataset.selectorSummaryValue = safe.id;
-          button.textContent = `${version.version_id} · ${version.status || "unknown"} · ${version.published_at || "未发布"}`;
-          return button;
-        }) : [createTextElement(document, "article", "暂无证据", "selector-detail-row")]),
-      );
-    }
-    renderValidationMatrix(document, safe.evidence.rounds);
   }
 
   function operationSummary(document, label, value) {
@@ -3979,46 +3945,22 @@
       + `${state.attempt_count ? ` · ${state.attempt_count} 次` : ""}`;
   }
 
-  function runDescription(run) {
-    const profiles = run.profiles.map(
-      (profile) => `${profile.profile_mask} ${profile.status}`,
-    ).join(" / ");
-    const stages = run.stages.map(
-      (stage) => `${stage.name} ${stage.status}`
-        + `${stage.duration_ms !== null ? ` ${stage.duration_ms}ms` : ""}`,
-    ).join(" / ");
-    const elements = run.elements.map(
-      (item) => `${item.alias} ${item.status}`
-        + `${item.failure_class ? ` ${item.failure_class}` : ""}`
-        + ` repairs=${item.repair_attempt_count}`,
-    ).join(" / ");
-    return [
-      `${run.trigger || "unknown"} · actor ${run.trigger_actor || "系统"} · ${run.due_slot || "无 due slot"} · ${run.rollout_mode || "无 rollout"}`,
-      profiles || "暂无 Profile 证据",
-      run.rounds.length
-        ? run.rounds.map(
-          (round) => `${round.profile_mask} 第 ${round.round} 轮 ${round.status}`,
-        ).join(" / ")
-        : "暂无轮次证据",
-      stages || "暂无阶段证据",
-      elements || (
-        run.failed_aliases.length
-          ? `失败元素 ${run.failed_aliases.join(", ")}`
-          : "暂无元素结果"
-      ),
-      run.repairs.length
-        ? run.repairs.map(
-          (repair) => `repair ${repair.attempt} · ${repair.failure_code || "unknown"} · ${repair.validation_result || "unknown"}`,
-        ).join(" / ")
-        : "repairs=0",
-      operationStateText("publish", run.publication),
-      operationStateText("reconcile", run.reconciliation),
-      operationStateText("cleanup", run.cleanup),
-      operationStateText("lease", run.lease),
-      run.retry_delay_minutes
-        ? `基础设施失败，${run.retry_delay_minutes} 分钟后重试`
-        : (run.next_retry_at ? `下次重试 ${run.next_retry_at}` : ""),
-    ].filter(Boolean);
+  function runSummaryLines(raw) {
+    const presentation = buildRunPresentation(raw);
+    const lines = [
+      `状态：${presentation.statusLabel}`,
+      `当前步骤：${presentation.currentStage.title}`,
+      `进度：${presentation.completedStages}/5`,
+      `结果：${presentation.result}`,
+    ];
+    if (presentation.failure) {
+      lines.push(
+        `失败原因：${presentation.failure.reason}`,
+        `影响范围：${presentation.failure.impact}`,
+        `系统下一步：${presentation.failure.nextAction}`,
+      );
+    }
+    return lines;
   }
 
   function renderRuns(document, state) {
@@ -4027,6 +3969,7 @@
     if (rows) {
       rows.replaceChildren(
         ...(runs.length ? runs.map((run) => {
+          const presentation = buildRunPresentation(run);
           const row = document.createElement("article");
           row.className = "selector-operation-row";
           row.dataset.runId = run.id;
@@ -4034,11 +3977,26 @@
             createTextElement(
               document,
               "strong",
-              `${run.id || "未知运行"} · ${run.status}`,
+              `运行 ${run.id || "未编号"}`,
             ),
-            ...runDescription(run).map((line) => (
-              createTextElement(document, "span", line, "muted")
-            )),
+            createTextElement(
+              document,
+              "span",
+              `状态：${presentation.statusLabel}`,
+              "muted",
+            ),
+            createTextElement(
+              document,
+              "span",
+              `当前步骤：${presentation.currentStage.title}`,
+              "muted",
+            ),
+            createTextElement(
+              document,
+              "span",
+              `进度 ${presentation.completedStages}/5 · ${presentation.result}`,
+              "muted",
+            ),
           );
           const actions = document.createElement("div");
           actions.className = "selector-operation-actions";
@@ -4094,7 +4052,6 @@
     return [
       `base ${version.base_version_id || "无"}`,
       `hash ${version.bundle_hash || "无"}`,
-      `model ${version.model_id || "无"} · prompt ${version.prompt_version || "无"}`,
       `created ${version.created_at || "未知"} · validated ${version.validated_at || "未知"} · published ${version.published_at || "未发布"}`,
       `changed=${version.changed_elements.length} · dependencies=${version.dependencies.length}`,
       operationStateText("SQLite", version.sqlite),
@@ -4166,7 +4123,6 @@
       `aliases ${alert.aliases.join(", ") || "无"}`,
       `strategies ${alert.strategy_ids.join(", ") || "无"}`,
       `Active ${alert.active_version || "无"} · LKG ${alert.lkg_version || "无"}`,
-      `repairs=${alert.repairs.length}`,
       alert.retries.length
         ? `retries ${alert.retries.map((item) => (
           `${item.delay_minutes || "?"}m ${item.status}`
@@ -4270,6 +4226,7 @@
       `rollout: ${settings.rollout_mode}`,
       `schedule: ${settings.schedule_time} ${settings.timezone}`,
       `Origin: ${settings.target_origin || "未设置"}`,
+      `页面等待: ${settings.page_timeout_seconds} 秒`,
       `retry: ${settings.retry_policy.delays_minutes.join("/")} 分钟`,
       `freshness: ${settings.freshness_hours} 小时`,
     ]);
@@ -4334,12 +4291,6 @@
         }),
       );
     }
-    replaceSimpleRows(document, "#selector-settings-model", [
-      `${settings.model.id || "未选择"} · ${settings.model.provider || "unknown"}`,
-      `${settings.model.mode || "unknown"} · ${settings.model.status}`,
-      `API Key: ${settings.model.api_key_set ? "已设置" : "未设置"}`,
-      "LLM 仅用于修正，不参与首轮确定性候选生成。",
-    ]);
     replaceSimpleRows(document, "#selector-settings-redis", [
       `${settings.redis.status} · namespace ${settings.redis.namespace || "未设置"}`,
       `AOF: ${settings.redis.aof_enabled ? "通过" : "未确认"}`,
@@ -4355,18 +4306,18 @@
       `delivery: ${settings.webhook.status} · ${settings.webhook.last_delivery_at || "无"}`,
     ]);
     replaceSimpleRows(document, "#selector-settings-permissions", [
-      "administrator: 读取、设置、预检、秘密清除、账户管理、Webhook 测试",
+      "administrator: 读取、设置、秘密清除、账户管理、Webhook 测试",
       "operator: 只读设置、立即探测、确认告警、Webhook synthetic 测试",
       "后端权限策略为最终依据。",
     ]);
     const save = document.querySelector("#selector-settings-save");
-    const preflight = document.querySelector("#selector-settings-preflight");
     const reload = document.querySelector("#selector-settings-reload");
     const webhookTest = document.querySelector(
       "#selector-settings-webhook-test",
     );
     if (save) save.hidden = !permissions.canEdit;
-    if (preflight) preflight.hidden = !permissions.canEdit;
+    const obsoleteCheck = document.querySelector("#selector-settings-preflight");
+    if (obsoleteCheck) obsoleteCheck.hidden = true;
     if (reload) {
       reload.hidden = !permissions.canEdit || state?.settingsDraftStale !== true;
     }
@@ -4387,7 +4338,6 @@
       ) {
         form.dataset.dirty = "false";
         for (const name of [
-          "modelApiKey",
           "redisPassword",
           "webhookSigningSecret",
           "webhookUrl",
@@ -4411,8 +4361,8 @@
         setValue("rolloutMode", settings.rollout_mode);
         setValue("scheduleTime", settings.schedule_time);
         setValue("targetOrigin", settings.target_origin);
+        setValue("pageTimeoutSeconds", settings.page_timeout_seconds);
         setValue("freshnessHours", settings.freshness_hours);
-        setValue("modelId", settings.model.id);
         setValue("redisNamespace", settings.redis.namespace);
         setChecked("webhookEnabled", settings.webhook.enabled);
         setValue("webhookType", settings.webhook.type || "generic");
@@ -4514,176 +4464,6 @@
     );
   }
 
-  function renderElementWorkspace(document, state) {
-    const selected = state?.selected;
-    const directory = document.querySelector("#selector-element-directory");
-    const detailView = document.querySelector("#selector-element-detail");
-    const wizard = document.querySelector("#selector-element-wizard");
-    const migration = document.querySelector(
-      "#selector-element-migration-dialog",
-    );
-    const showingDetail = selected?.kind === "detail";
-    if (directory) directory.hidden = showingDetail;
-    if (detailView) detailView.hidden = !showingDetail;
-
-    if (showingDetail) {
-      renderElementDetail(document, selected.detail);
-      const activeTab = DETAIL_TABS.includes(selected.activeDetailTab)
-        ? selected.activeDetailTab
-        : "evidence";
-      document.querySelectorAll("[data-selector-detail-tab]").forEach((button) => {
-        const active = button.dataset.selectorDetailTab === activeTab;
-        button.classList.toggle("active", active);
-        button.setAttribute("aria-pressed", String(active));
-      });
-      document.querySelectorAll("[data-selector-detail-panel]").forEach((panel) => {
-        panel.hidden = panel.dataset.selectorDetailPanel !== activeTab;
-      });
-      const validate = document.querySelector("#selector-element-detail-validate");
-      if (validate) {
-        validate.hidden = !canCreateElement(state.session);
-        validate.disabled = selected.validationReady !== true;
-      }
-      setNodeText(
-        document,
-        "selector-element-detail-error",
-        selected.error || selected.request?.error_code || "",
-      );
-    }
-
-    const showingWizard = selected?.kind === "wizard";
-    if (wizard) {
-      if (showingWizard && !wizard.open && typeof wizard.showModal === "function") {
-        wizard.showModal();
-      } else if (!showingWizard && wizard.open && typeof wizard.close === "function") {
-        wizard.close();
-      }
-    }
-    if (showingWizard) {
-      const step = Math.min(Math.max(Number(selected.step) || 1, 1), 3);
-      setNodeText(document, "selector-element-wizard-progress", `第 ${step} / 3 步`);
-      document.querySelectorAll("[data-selector-wizard-step]").forEach((panel) => {
-        panel.hidden = Number(panel.dataset.selectorWizardStep) !== step;
-      });
-      const back = document.querySelector("#selector-element-wizard-back");
-      const next = document.querySelector("#selector-element-wizard-next");
-      const probe = document.querySelector("#selector-element-wizard-probe");
-      const validate = document.querySelector("#selector-element-wizard-validate");
-      if (back) back.hidden = step === 1;
-      if (next) next.hidden = step !== 1;
-      if (probe) probe.hidden = step !== 2;
-      if (validate) {
-        validate.hidden = (
-          !canCreateElement(state.session)
-          || (step !== 2 && step !== 3)
-        );
-        validate.disabled = selected.validationReady !== true;
-      }
-      const wizardForm = document.querySelector(
-        "#selector-element-wizard-form",
-      );
-      if (
-        wizardForm
-        && selected.form
-        && wizardForm.dataset.discoveryGeneration
-          !== String(selected.workspaceGeneration)
-      ) {
-        Object.entries(selected.form).forEach(([name, value]) => {
-          const control = wizardForm.elements?.namedItem(name);
-          if (control) {
-            control.value = Array.isArray(value) ? value.join(", ") : value;
-          }
-        });
-        wizardForm.dataset.discoveryGeneration = String(
-          selected.workspaceGeneration,
-        );
-      }
-      const suggestion = selected.suggestion || sanitizeProbeSuggestion({});
-      setNodeText(document, "selector-wizard-role", suggestion.role || "等待探测");
-      setNodeText(document, "selector-wizard-name", suggestion.name || "等待探测");
-      setNodeText(
-        document,
-        "selector-wizard-llm-used",
-        suggestion.llm_used ? "是（仅修复）" : "否",
-      );
-      replaceSimpleRows(
-        document,
-        "#selector-wizard-attributes",
-        suggestion.stable_attributes.map(
-          (attribute) => `${attribute.name}=${attribute.value}`,
-        ),
-      );
-      renderLocatorRows(document, "selector-wizard-candidates", [
-        {label: "候选", items: suggestion.candidates},
-      ]);
-      replaceSimpleRows(
-        document,
-        "#selector-wizard-rejected",
-        suggestion.rejected_methods.map(
-          (item) => `${item.method} · ${item.code}`,
-        ).concat(suggestion.warnings),
-      );
-      renderValidationMatrixInto(
-        document,
-        selected.validation?.rounds || [],
-        "selector-element-wizard-validation-matrix",
-      );
-      setNodeText(
-        document,
-        "selector-element-wizard-status",
-        selected.error
-        || (
-          selected.request
-            ? elementRequestStatusText(selected.request)
-            : ""
-        ),
-      );
-    } else {
-      const form = document.querySelector("#selector-element-wizard-form");
-      if (form && typeof form.reset === "function") form.reset();
-      for (const id of [
-        "#selector-wizard-attributes",
-        "#selector-wizard-candidates",
-        "#selector-wizard-rejected",
-        "#selector-element-wizard-validation-matrix",
-      ]) {
-        const node = document.querySelector(id);
-        if (node && typeof node.replaceChildren === "function") {
-          node.replaceChildren();
-        }
-      }
-    }
-
-    const showingMigration = selected?.kind === "migration";
-    if (migration) {
-      if (
-        showingMigration
-        && !migration.open
-        && typeof migration.showModal === "function"
-      ) {
-        migration.showModal();
-      } else if (
-        !showingMigration
-        && migration.open
-        && typeof migration.close === "function"
-      ) {
-        migration.close();
-      }
-    }
-    if (showingMigration) {
-      setNodeText(
-        document,
-        "selector-element-migration-copy",
-        selected.safetyCopy || migrationSafetyCopy(),
-      );
-      setNodeText(
-        document,
-        "selector-element-migration-error",
-        selected.error || "",
-      );
-    }
-  }
-
   function openDialogForState(dialog, showing) {
     if (!dialog) return;
     if (showing && !dialog.open && typeof dialog.showModal === "function") {
@@ -4695,8 +4475,26 @@
 
   function operationDetailLines(workspace) {
     const detail = workspace?.detail;
+    if (workspace?.kind === "element-detail") {
+      const element = sanitizeElementDetail(detail);
+      const definition = element.definition || {};
+      return [
+        `名称：${element.display_name || element.id}`,
+        `状态：${inventoryUI?.elementStatusText(element.status) || element.status || "未知"}`,
+        `页面：${definition.page_key || element.page_key || "未知"}`,
+        `路径：${(definition.locators || []).map(
+          (item) => `${item.type.toUpperCase()} ${item.value}`,
+        ).join("；") || "暂无"}`,
+        `操作步骤：${definition.operation_steps?.length || 0}`,
+        `策略依赖：${element.dependencies.map(
+          (item) => item.strategy_name || item.strategy_id,
+        ).join("、") || "无"}`,
+        `最近验证：${element.last_validated_at || "无"}`,
+        `历史版本：${element.history.length}`,
+      ];
+    }
     if (workspace?.kind === "run-detail") {
-      return runDescription(sanitizeRun(detail));
+      return runSummaryLines(detail);
     }
     if (workspace?.kind === "version-detail") {
       const version = sanitizeVersion(detail);
@@ -4718,9 +4516,6 @@
     ) {
       const alert = sanitizeAlert(detail);
       return alertDescription(alert).concat(
-        alert.repairs.map(
-          (item) => `repair ${item.attempt} · ${item.failure_code || "unknown"} · ${item.validation_result || "unknown"}`,
-        ),
         alert.timeline.map(
           (item) => `timeline ${item.event || "unknown"} · ${item.occurred_at || "未知"} · ${item.actor || "系统"}`,
         ),
@@ -4750,14 +4545,36 @@
         `enabled ${settings.enabled} · rollout ${settings.rollout_mode}`,
         `schedule ${settings.schedule_time} ${settings.timezone}`,
         `Origin ${settings.target_origin || "未设置"}`,
+        `页面等待 ${settings.page_timeout_seconds} 秒`,
         `Profiles ${settings.profiles.map((item) => item.profile_mask).join(", ") || "无"}`,
         `Redis ${settings.redis.status} · AOF ${settings.redis.aof_enabled} · ${settings.redis.eviction_policy || "未确认"}`,
-        `Model ${settings.model.id || "未设置"} · ${settings.model.status}`,
         `Webhook ${settings.webhook.enabled} · ${settings.webhook.status}`,
         workspace.outcome || "",
       ].filter(Boolean);
     }
     return [];
+  }
+
+  function renderRunStageCards(document, container, presentation) {
+    if (!container) return;
+    container.replaceChildren(...presentation.stages.map((stage, index) => {
+      const card = document.createElement("article");
+      card.className = "selector-run-stage-card";
+      card.dataset.stageStatus = stage.status;
+      card.append(
+        createTextElement(document, "span", `步骤 ${index + 1}`, "muted"),
+        createTextElement(document, "strong", stage.title),
+        createTextElement(document, "span", stage.purpose, "muted"),
+        createTextElement(
+          document,
+          "span",
+          stage.statusLabel,
+          `selector-run-stage-status is-${stage.status}`,
+        ),
+        createTextElement(document, "span", stage.result),
+      );
+      return card;
+    }));
   }
 
   function renderOperationWorkspace(document, state) {
@@ -4770,6 +4587,7 @@
       "secret-clear-confirm",
     ]);
     const detailKinds = new Set([
+      "element-detail",
       "gate-result",
       "run-detail",
       "version-detail",
@@ -4869,6 +4687,7 @@
 
     if (showingDetail) {
       const titles = {
+        "element-detail": "已选元素详情",
         "gate-result": "策略闸门结果",
         "run-detail": "探针运行详情",
         "version-detail": "版本详情",
@@ -4895,83 +4714,40 @@
       const stageDetail = document.querySelector(
         "#selector-run-stage-detail",
       );
-      const discoveryDetail = document.querySelector(
-        "#selector-run-discoveries",
+      const technicalDetail = document.querySelector(
+        "#selector-run-technical-details",
+      );
+      const technicalLines = document.querySelector(
+        "#selector-run-technical-lines",
       );
       if (workspace.kind === "run-detail") {
         const run = sanitizeRun(workspace.detail);
-        if (stageDetail) {
-          stageDetail.replaceChildren(
-            ...run.stages.map((stage) => createTextElement(
+        const presentation = buildRunPresentation(run);
+        renderRunStageCards(document, stageDetail, presentation);
+        if (technicalDetail) {
+          const changedRun = technicalDetail.dataset.runId !== run.id;
+          technicalDetail.hidden = false;
+          if (changedRun) technicalDetail.open = false;
+          technicalDetail.dataset.runId = run.id;
+        }
+        if (technicalLines) {
+          technicalLines.replaceChildren(
+            ...runTechnicalLines(run).map((line) => createTextElement(
               document,
               "article",
-              `${stage.name} · ${stage.status || "unknown"}${
-                stage.round ? ` · 第 ${stage.round} 轮` : ""
-              }${
-                stage.attempt_count
-                  ? ` · 尝试 ${stage.attempt_count}`
-                  : ""
-              }${
-                stage.failure_code ? ` · ${stage.failure_code}` : ""
-              }`,
-              "selector-discovery-row",
+              line,
+              "selector-detail-row",
             )),
-          );
-        }
-        if (discoveryDetail) {
-          discoveryDetail.replaceChildren(
-            ...run.discoveries.map((candidate) => {
-              const row = document.createElement("article");
-              row.className = "selector-discovery-row";
-              row.append(
-                createTextElement(
-                  document,
-                  "strong",
-                  `${candidate.page_state} · ${candidate.role} · ${
-                    candidate.name || "unnamed"
-                  }`,
-                ),
-                createTextElement(
-                  document,
-                  "span",
-                  Object.entries(candidate.attributes)
-                    .map(([key, value]) => `${key}=${value}`)
-                    .join(" · ") || "无稳定属性",
-                  "muted",
-                ),
-                createTextElement(
-                  document,
-                  "span",
-                  candidate.recommended_locators.length
-                    ? `定位路径：${candidate.recommended_locators
-                      .map(locatorDescription)
-                      .join("；")}`
-                    : "定位路径：暂无安全候选",
-                  "muted",
-                ),
-                createTextElement(
-                  document,
-                  "span",
-                  `Profile ${candidate.profile_count} · ${
-                    candidate.actionable ? "可操作" : "仅可见"
-                  }`,
-                  "muted",
-                ),
-              );
-              if (canCreateElement(state.session)) {
-                const add = document.createElement("button");
-                add.type = "button";
-                add.dataset.discoveryFingerprint = candidate.fingerprint;
-                add.textContent = "加入元素目录";
-                row.append(add);
-              }
-              return row;
-            }),
           );
         }
       } else {
         stageDetail?.replaceChildren();
-        discoveryDetail?.replaceChildren();
+        technicalLines?.replaceChildren();
+        if (technicalDetail) {
+          technicalDetail.hidden = true;
+          technicalDetail.open = false;
+          delete technicalDetail.dataset.runId;
+        }
       }
       const actions = document.querySelector(
         "#selector-operation-detail-actions",
@@ -5048,7 +4824,15 @@
       body?.replaceChildren();
       actions?.replaceChildren();
       document.querySelector("#selector-run-stage-detail")?.replaceChildren();
-      document.querySelector("#selector-run-discoveries")?.replaceChildren();
+      document.querySelector("#selector-run-technical-lines")?.replaceChildren();
+      const technicalDetail = document.querySelector(
+        "#selector-run-technical-details",
+      );
+      if (technicalDetail) {
+        technicalDetail.hidden = true;
+        technicalDetail.open = false;
+        delete technicalDetail.dataset.runId;
+      }
     }
   }
 
@@ -5075,8 +4859,7 @@
     let wired = false;
     const dialogReturnFocus = new WeakMap();
     const dialogSelectors = [
-      "#selector-element-wizard",
-      "#selector-element-migration-dialog",
+      "#selector-element-picker-dialog",
       "#selector-operation-confirm-dialog",
       "#selector-operation-detail-dialog",
       "#selector-temporary-password-dialog",
@@ -5236,103 +5019,116 @@
         "click",
         () => controller.setElementPage(controller.state.elements.page + 1),
       );
-      document.querySelector("#selector-element-add")?.addEventListener(
+      document.querySelector("#selector-element-picker")?.addEventListener(
         "click",
-        () => controller.openElementWizard(),
+        () => controller.openLivePicker(),
       );
-      document.querySelector("#selector-element-rows")?.addEventListener(
+      const pickerForm = document.querySelector("#selector-picker-form");
+      document.querySelector("#selector-picker-start")?.addEventListener(
         "click",
-        (event) => {
-          const open = event.target.closest?.("[data-selector-element-id]");
-          if (open) {
-            controller.openElementDetail(open.dataset.selectorElementId);
-            return;
-          }
-          const migrate = event.target.closest?.("[data-selector-migrate-id]");
-          if (migrate) {
-            const item = controller.state.elements.items.find(
-              (entry) => entry.id === migrate.dataset.selectorMigrateId,
-            );
-            if (item) controller.openLegacyMigration(item);
-          }
-        },
+        () => controller.startLivePicker(pickerForm),
       );
-      const wizardForm = document.querySelector("#selector-element-wizard-form");
-      document.querySelector("#selector-element-wizard-next")?.addEventListener(
+      document.querySelector("#selector-picker-confirm")?.addEventListener(
         "click",
-        () => controller.createElementDraft(wizardForm),
-      );
-      document.querySelector("#selector-element-wizard-back")?.addEventListener(
-        "click",
-        () => controller.setElementWizardStep(
-          (controller.state.selected?.step || 1) - 1,
+        () => controller.confirmCollector(
+          (controller.state.picker?.selectedIds || []).map((selectionId) => ({
+            selectionId,
+            displayName: controller.state.picker?.names?.[selectionId] || "",
+          })),
         ),
       );
-      document.querySelector("#selector-element-wizard-probe")?.addEventListener(
-        "click",
-        () => controller.requestElementProbe(),
-      );
-      document.querySelector("#selector-element-wizard-validate")?.addEventListener(
-        "click",
-        () => controller.requestElementValidation(),
-      );
-      document.querySelector("#selector-element-detail-probe")?.addEventListener(
-        "click",
-        () => controller.requestElementProbe(),
-      );
-      document.querySelector("#selector-element-detail-validate")?.addEventListener(
-        "click",
-        () => controller.requestElementValidation(),
-      );
-      document.querySelector("#selector-element-detail-back")?.addEventListener(
-        "click",
-        () => controller.closeElementWorkspace(),
-      );
-      document.querySelectorAll("[data-selector-detail-tab]").forEach((button) => {
-        button.addEventListener(
-          "click",
-          () => controller.activateElementDetailTab(
-            button.dataset.selectorDetailTab,
-          ),
-        );
-      });
-      for (const id of [
-        "#selector-element-wizard-close",
-        "#selector-element-migration-close",
-        "#selector-element-migration-cancel",
-      ]) {
+      for (const id of ["#selector-picker-cancel", "#selector-picker-close"]) {
         document.querySelector(id)?.addEventListener(
           "click",
-          () => controller.closeElementWorkspace(),
+          () => controller.cancelLivePicker(),
         );
       }
-      const workspaceDialogs = [
-        {
-          selector: "#selector-element-wizard",
-          kind: "wizard",
-        },
-        {
-          selector: "#selector-element-migration-dialog",
-          kind: "migration",
-        },
-      ];
-      workspaceDialogs.forEach(({selector, kind}) => {
-        const dialog = document.querySelector(selector);
-        dialog?.addEventListener("cancel", (event) => {
-          event.preventDefault();
-          if (controller.state.selected?.kind === kind) {
-            controller.closeElementWorkspace();
-          }
-        });
-        dialog?.addEventListener("close", () => {
-          if (controller.state.selected?.kind === kind) {
-            controller.closeElementWorkspace();
-          }
-        });
-      });
-      document.querySelector("#selector-element-migration-confirm")?.addEventListener(
+      document.querySelector("#selector-picker-selections")?.addEventListener(
         "click",
-        () => controller.requestLegacyMigration(),
+        (event) => {
+          const remove = event.target.closest?.("[data-selector-picker-remove]");
+          if (remove) {
+            controller.removeLivePickerSelection(
+              remove.dataset.selectorPickerRemove,
+            );
+          }
+        },
+      );
+      const inventoryList = document.querySelector("#selector-inventory-list");
+      inventoryList?.addEventListener("change", (event) => {
+        const checkbox = event.target.closest?.("[data-inventory-select]");
+        if (checkbox) {
+          controller.setCollectorSelection(
+            checkbox.dataset.inventorySelect,
+            checkbox.checked,
+          );
+        }
+      });
+      inventoryList?.addEventListener("input", (event) => {
+        const input = event.target.closest?.("[data-inventory-name]");
+        if (input) controller.setCollectorName(input.dataset.inventoryName, input.value);
+      });
+      const collectorFilters = () => controller.setCollectorFilters({
+        type: document.querySelector("#selector-inventory-type")?.value || "all",
+        region: document.querySelector("#selector-inventory-region")?.value || "all",
+        locatable: document.querySelector("#selector-inventory-locatable")?.checked === true,
+        search: document.querySelector("#selector-inventory-search")?.value || "",
+      });
+      for (const selector of [
+        "#selector-inventory-type", "#selector-inventory-region",
+        "#selector-inventory-locatable",
+      ]) document.querySelector(selector)?.addEventListener("change", collectorFilters);
+      document.querySelector("#selector-inventory-search")?.addEventListener(
+        "input", collectorFilters,
+      );
+      document.querySelector("#selector-inventory-refresh")?.addEventListener(
+        "click", () => controller.pollCollector(),
+      );
+      document.querySelector("#selector-managed-rebind-new")?.addEventListener(
+        "click", async () => {
+          await controller.activateTab("collect");
+          controller.openCollector();
+        },
+      );
+      const pickerDialog = document.querySelector(
+        "#selector-element-picker-dialog",
+      );
+      pickerDialog?.addEventListener("cancel", (event) => {
+        event.preventDefault();
+        controller.cancelLivePicker();
+      });
+      document.querySelector("#selector-managed-elements")?.addEventListener(
+        "click",
+        async (event) => {
+          const action = event.target.closest?.("[data-managed-action]");
+          if (!action || action.disabled) return;
+          const elementId = action.dataset.elementId;
+          const item = controller.state.elements.items.find(
+            (entry) => entry.id === elementId,
+          );
+          if (!item) return;
+          if (action.dataset.managedAction === "detail") {
+            controller.openManagedElementDetail(elementId);
+          } else if (action.dataset.managedAction === "rename") {
+            const name = win.prompt("新的自定义名称", item.display_name || "");
+            if (name !== null) controller.renameElement(elementId, name, item.revision);
+          } else if (action.dataset.managedAction === "rebind") {
+            controller.beginElementRebind(elementId);
+          } else if (action.dataset.managedAction === "delete") {
+            if (win.confirm(`确定删除“${item.display_name || elementId}”吗？`)) {
+              controller.deleteElement(elementId, item.revision);
+            }
+          } else if (action.dataset.managedAction === "screenshot") {
+            const alert = controller.state.alerts.items.find(
+              (entry) => (entry.aliases || []).includes(elementId),
+            );
+            if (alert) controller.openAlertDetail(alert);
+            else {
+              controller.state.status = {kind: "success", message: "该元素暂无现场截图"};
+              controller.refreshCurrent();
+            }
+          }
+        },
       );
       function summaryClick(event) {
         const target = event.target.closest?.("[data-selector-summary-tab]");
@@ -5353,14 +5149,11 @@
         "click",
         summaryClick,
       );
-      document.querySelector("#selector-element-detail-history")?.addEventListener(
-        "click",
-        summaryClick,
-      );
-      document.querySelector("#selector-run-now")?.addEventListener(
-        "click",
-        () => controller.requestRunNow(),
-      );
+      document.querySelectorAll(
+        "#selector-probe-run-now, #selector-run-now",
+      ).forEach((button) => {
+        button.addEventListener("click", () => controller.requestRunNow());
+      });
       document.querySelector("#selector-gate-rows")?.addEventListener(
         "click",
         (event) => {
@@ -5437,22 +5230,6 @@
           versionClick(event);
           alertClick(event);
         });
-      document.querySelector("#selector-run-discoveries")
-        ?.addEventListener("click", (event) => {
-          const button = event.target.closest?.(
-            "[data-discovery-fingerprint]",
-          );
-          if (!button) return;
-          const run = sanitizeRun(
-            controller.state.operationWorkspace?.detail,
-          );
-          const candidate = run.discoveries.find(
-            (item) => (
-              item.fingerprint === button.dataset.discoveryFingerprint
-            ),
-          );
-          if (candidate) controller.openDiscoveryCandidate(candidate);
-        });
       const settingsForm = document.querySelector("#selector-settings-form");
       function settingsFormControl(name) {
         return settingsForm?.elements?.namedItem(name);
@@ -5468,12 +5245,12 @@
           target_origin: normalizeTargetOrigin(
             settingsFormControl("targetOrigin")?.value || "",
           ),
+          page_timeout_seconds: Number(
+            settingsFormControl("pageTimeoutSeconds")?.value || 90,
+          ),
           freshness_hours: Number(
             settingsFormControl("freshnessHours")?.value || 36,
           ),
-          model: Object.assign({}, current.model, {
-            id: settingsFormControl("modelId")?.value || "",
-          }),
           redis: Object.assign({}, current.redis, {
             namespace: settingsFormControl("redisNamespace")?.value || "",
           }),
@@ -5485,7 +5262,6 @@
       }
       function settingsSecretsFromForm() {
         return {
-          model_api_key: settingsFormControl("modelApiKey")?.value || "",
           redis_password: settingsFormControl("redisPassword")?.value || "",
           webhook_signing_secret: (
             settingsFormControl("webhookSigningSecret")?.value || ""
@@ -5497,10 +5273,6 @@
         settingsForm.dataset.dirty = "true";
         controller.stageSettingsDraft(settingsCandidateFromForm());
       });
-      document.querySelector("#selector-settings-preflight")?.addEventListener(
-        "click",
-        () => controller.requestSettingsPreflight(settingsCandidateFromForm()),
-      );
       document.querySelector("#selector-settings-save")?.addEventListener(
         "click",
         () => controller.confirmSettingsSave(
@@ -5652,6 +5424,7 @@
       });
       detailDialog?.addEventListener("close", () => {
         if ([
+          "element-detail",
           "gate-result",
           "run-detail",
           "version-detail",
@@ -5718,6 +5491,7 @@
         await win.navigator.clipboard.writeText(value);
         return true;
       },
+      confirm: (message) => win.confirm(message),
       createAbortController: () => (
         typeof win.AbortController === "function"
           ? new win.AbortController()
@@ -5750,32 +5524,48 @@
         wire(controller);
         renderOverview(document, state);
         renderElementDirectory(document, state);
-        renderElementWorkspace(document, state);
+        inventoryUI?.renderManagedElements(
+          document,
+          document.querySelector("#selector-managed-elements"),
+          state.elements?.items || [],
+          {canEdit: state.session?.role === "administrator"},
+        );
+        renderLivePicker(document, state);
         renderGates(document, state);
         renderRuns(document, state);
+        const latestRun = (state.runs?.items || [])[0] || {};
+        renderRunStageCards(
+          document,
+          document.querySelector("#selector-run-current-steps"),
+          buildRunPresentation(latestRun),
+        );
         renderVersions(document, state);
         renderAlerts(document, state);
         renderSettings(document, state);
         renderAccountManagement(document, state);
         renderOperationWorkspace(document, state);
         renderTemporaryPassword(document, state);
-        const runNow = document.querySelector("#selector-run-now");
-        if (runNow) {
-          runNow.hidden = !["administrator", "operator"].includes(
-            state.session?.role,
-          );
-          runNow.disabled = (
-            (
-              state.operationWorkspace?.kind === "run-request"
-              && state.operationWorkspace.busy === true
-            )
-            || (
-              state.operationWorkspace?.kind === "run-detail"
-              && runIsActive(state.operationWorkspace.detail)
-            )
-            || (state.runs?.items || []).some(runIsActive)
-          );
-        }
+        const runNowButtons = document.querySelectorAll(
+          "#selector-probe-run-now, #selector-run-now",
+        );
+        const runNowHidden = !["administrator", "operator"].includes(
+          state.session?.role,
+        );
+        const runNowDisabled = (
+          (
+            state.operationWorkspace?.kind === "run-request"
+            && state.operationWorkspace.busy === true
+          )
+          || (
+            state.operationWorkspace?.kind === "run-detail"
+            && runIsActive(state.operationWorkspace.detail)
+          )
+          || (state.runs?.items || []).some(runIsActive)
+        );
+        runNowButtons.forEach((button) => {
+          button.hidden = runNowHidden;
+          button.disabled = runNowDisabled;
+        });
         document.querySelectorAll("[data-selector-probe-tab]").forEach((button) => {
           const active = button.dataset.selectorProbeTab === state.activeTab;
           button.setAttribute("aria-selected", String(active));
@@ -5816,13 +5606,12 @@
     TABS,
     accountActionModel,
     alertActionModel,
+    buildRunPresentation,
     buildElementQuery,
     canCreateElement,
     clearSettingsFormSecrets,
     createSelectorProbeUI,
     dangerousSettingsDiff,
-    elementRequestStatusText,
-    migrationSafetyCopy,
     normalizeTargetOrigin,
     parseProfileIds,
     manualResumeOutcome,
@@ -5831,26 +5620,25 @@
     renderAccountManagement,
     renderOperationWorkspace,
     renderElementDirectory,
-    renderElementDetail,
+    renderLivePicker,
     renderGates,
     renderOverview,
+    renderRunStageCards,
     renderRuns,
     renderSettings,
     renderTemporaryPassword,
-    renderValidationMatrix,
     renderVersions,
+    runTechnicalLines,
     sanitizeAlert,
     sanitizeAccount,
     sanitizeElementDetail,
     sanitizeGate,
-    sanitizeProbeSuggestion,
-    sanitizeDiscovery,
+    sanitizePickerSession,
     sanitizeRun,
     sanitizeSettings,
     sanitizeStructuredLocators,
     sanitizeVersion,
     selectOverviewElements,
-    serializeSemanticContract,
     serializeElementFilters,
     selectorProbeDependencies,
     settingsFingerprint,

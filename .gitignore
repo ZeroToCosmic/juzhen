@@ -29,6 +29,7 @@ test-results/
 
 # Credentials and real configuration
 .env
+tmp-cc-auth/
 config.json
 config.json.backup.*
 config.json.corrupt*

@@ -1,89 +1,38 @@
 from __future__ import annotations
 
-import sqlite3
 import json
 
 import pytest
 
-from selector_probe.catalog import ElementCatalog, ElementQuery
-from browser_element_schema import TIKTOK_COMMENT_TEMPLATE
-from selector_probe.contracts import default_tiktok_contracts
+from selector_probe.catalog import (
+    CREATE_FIELDS,
+    ElementCatalog,
+    ElementQuery,
+)
 from selector_probe.store import (
     ElementHasDependenciesError,
-    ElementMigrationConflictError,
     SelectorProbeStore,
     StaleElementRevisionError,
 )
 
 
-def test_seed_legacy_comment_elements_is_idempotent(tmp_path):
-    with SelectorProbeStore(tmp_path / "probe.db") as store:
-        assert store.seed_legacy_elements(
-            TIKTOK_COMMENT_TEMPLATE,
-            default_tiktok_contracts(),
-        ) == 3
-        assert store.seed_legacy_elements(
-            TIKTOK_COMMENT_TEMPLATE,
-            default_tiktok_contracts(),
-        ) == 0
-        rows = store.connection.execute(
-            """
-            SELECT id, management_source, published_status, draft_status,
-                   scope
-            FROM managed_elements ORDER BY id
-            """
-        ).fetchall()
-        drafts = store.connection.execute(
-            "SELECT element_id, candidates_json FROM element_drafts"
-        ).fetchall()
-
-    assert len(rows) == 3
-    assert {row["management_source"] for row in rows} == {"legacy_manual"}
-    assert {row["published_status"] for row in rows} == {"using_lkg"}
-    assert {row["draft_status"] for row in rows} == {"draft"}
-    assert {row["scope"] for row in rows} == {
-        "active_video",
-        "visible_comment_panel",
-    }
-    assert all(json.loads(row["candidates_json"]) for row in drafts)
-
-
-def _add_element(
-    store,
-    element_id,
-    *,
-    published_status="healthy",
-    draft_status=None,
-    source="automatic",
-    scope="active_video",
-):
-    store.upsert_managed_element_projection(
-        element_id=element_id,
-        display_name=element_id.replace("-", " ").title(),
-        management_source=source,
-        published_status=published_status,
-        draft_status=draft_status,
-        active_version_id="sel-active",
-        scope=scope,
-        primary_locator_type="attribute",
-        last_validated_at="2026-07-29T03:00:00+00:00",
-        actor_user_id=7,
-        actor_username="catalog-admin",
-    )
-
-
-def _draft_payload(**changes):
+def _manual_payload(**changes):
     payload = {
-        "display_name": "Share entry",
-        "intent": "find the share entry for the active video",
-        "required_state": "feed_ready",
-        "scope": "active_video",
-        "probe_action": "inspect_only",
-        "accepted_roles": ["button"],
-        "accepted_names": ["Share"],
-        "name_mode": "exact",
-        "preferred_attributes": ["data-e2e", "aria-label"],
-        "postcondition": "",
+        "display_name": "Comment input",
+        "page_key": "comment-panel",
+        "target_origin": "https://www.tiktok.com",
+        "url_pattern": "https://www.tiktok.com/*",
+        "operation_steps": [],
+        "fingerprint": {
+            "tag": "div",
+            "attributes": {"data-e2e": "comment-input"},
+        },
+        "locators": [
+            {
+                "type": "css",
+                "value": '[data-e2e="comment-input"]',
+            }
+        ],
     }
     payload.update(changes)
     return payload
@@ -92,136 +41,301 @@ def _draft_payload(**changes):
 @pytest.fixture
 def catalog_store(tmp_path):
     with SelectorProbeStore(tmp_path / "selector-probe.db") as store:
-        _add_element(store, "failed-element", published_status="failed")
-        _add_element(store, "lkg-element", published_status="using_lkg")
-        _add_element(store, "draft-element", draft_status="draft")
-        _add_element(
-            store,
-            "unavailable-element",
-            published_status="probe_unavailable",
-        )
-        for index in range(43):
-            _add_element(store, f"healthy-{index:02d}")
-        store.replace_strategy_dependencies(
-            [
-                (
-                    "healthy-00",
-                    "share-flow",
-                    "share-action",
-                    "click",
-                    "Share workflow",
-                ),
-                (
-                    "healthy-00",
-                    "share-flow",
-                    "share-again",
-                    "click",
-                    "Share workflow",
-                ),
-            ]
-        )
         yield store
 
 
-def test_catalog_paginates_and_prioritizes_unhealthy_items(catalog_store):
-    result = ElementCatalog(catalog_store).list(
-        ElementQuery(page=1, page_size=20, status="all")
-    )
-
-    assert result.page == 1
-    assert result.page_size == 20
-    assert result.total == 47
-    assert len(result.items) == 20
-    assert [item.runtime_status for item in result.items[:3]] == [
-        "failed",
-        "using_lkg",
-        "draft",
-    ]
-    assert result.revision >= 47
+def test_catalog_create_fields_are_manual_definition_only():
+    assert CREATE_FIELDS == {
+        "display_name",
+        "page_key",
+        "target_origin",
+        "url_pattern",
+        "operation_steps",
+        "fingerprint",
+        "locators",
+    }
 
 
-def test_catalog_legacy_merge_paging_matches_stable_global_order(
-    catalog_store,
-):
-    with catalog_store.connection:
-        catalog_store.connection.execute(
-            """
-            UPDATE managed_elements
-            SET last_validated_at = NULL
-            WHERE id IN (
-                SELECT id
-                FROM managed_elements
-                WHERE id LIKE 'healthy-%'
-                ORDER BY id DESC
-                LIMIT 24
-            )
-            """
-        )
+def test_catalog_creates_manual_draft_and_audits_actor(catalog_store):
     catalog = ElementCatalog(
         catalog_store,
-        legacy_elements_provider=lambda: {
-            "legacy-page-peer": {
-                "scope": "active_video",
-                "locators": [
-                    {
-                        "id": "legacy-page-peer-xpath",
-                        "type": "xpath",
-                        "value": "//button[@data-e2e='legacy-page-peer']",
-                        "enabled": True,
-                    }
-                ],
-            }
-        },
+        element_id_factory=lambda: "element-fixed",
     )
 
-    full = catalog.list(ElementQuery(page=1, page_size=100))
-    first = catalog.list(ElementQuery(page=1, page_size=20))
-    second = catalog.list(ElementQuery(page=2, page_size=20))
-    repeated = catalog.list(ElementQuery(page=2, page_size=20))
-    paged_ids = [item.id for item in (*first.items, *second.items)]
+    record = catalog.create_draft(
+        _manual_payload(display_name="  Comment   input  "),
+        actor_user_id=41,
+        actor_username="admin-user",
+    )
+    definition = catalog.draft(record.id)
+    audit = catalog_store.connection.execute(
+        """
+        SELECT event_type, actor_user_id, actor_username, target_id
+        FROM selector_management_audit_events
+        ORDER BY id DESC LIMIT 1
+        """
+    ).fetchone()
 
-    assert paged_ids == [item.id for item in full.items[:40]]
-    assert len(paged_ids) == len(set(paged_ids)) == 40
-    assert [item.id for item in second.items] == [
-        item.id for item in repeated.items
+    assert record.id == "element-fixed"
+    assert record.display_name == "Comment input"
+    assert record.status == "draft"
+    assert record.page_key == "comment-panel"
+    assert definition == {
+        "page_key": "comment-panel",
+        "target_origin": "https://www.tiktok.com",
+        "url_pattern": "https://www.tiktok.com/*",
+        "operation_steps": [],
+        "fingerprint": {
+            "tag": "div",
+            "attributes": {"data-e2e": "comment-input"},
+        },
+        "locators": [
+            {
+                "type": "css",
+                "value": '[data-e2e="comment-input"]',
+            }
+        ],
+    }
+    assert tuple(audit) == (
+        "element_created",
+        41,
+        "admin-user",
+        "element-fixed",
+    )
+
+
+def test_catalog_preserves_position_hint_inside_display_fingerprint(
+    catalog_store,
+):
+    catalog = ElementCatalog(catalog_store)
+    record = catalog.create_draft(
+        _manual_payload(
+            fingerprint={
+                "tag": "button",
+                "role": "button",
+                "name": "Comments",
+                "position_hint": {
+                    "x": 0.8,
+                    "y": 0.4,
+                    "width": 0.1,
+                    "height": 0.1,
+                },
+            }
+        ),
+        7,
+        "admin",
+    )
+
+    definition = catalog.draft(record.id)
+
+    assert definition["fingerprint"]["position_hint"]["x"] == 0.8
+    assert definition["fingerprint"]["role"] == "button"
+    assert definition["locators"] == [
+        {"type": "css", "value": '[data-e2e="comment-input"]'}
     ]
 
 
-def test_catalog_searches_dependency_id_and_name_and_counts_strategies(catalog_store):
-    catalog = ElementCatalog(catalog_store)
+def test_catalog_update_name_changes_name_only(catalog_store):
+    catalog = ElementCatalog(
+        catalog_store,
+        element_id_factory=lambda: "element-name",
+    )
+    created = catalog.create_draft(_manual_payload(), 7, "admin")
+    before = catalog.draft(created.id)
 
-    by_id = catalog.list(ElementQuery(search="share-flow"))
-    by_name = catalog.list(ElementQuery(search="Share workflow"))
-
-    assert [item.id for item in by_id.items] == ["healthy-00"]
-    assert [item.id for item in by_name.items] == ["healthy-00"]
-    assert by_name.items[0].dependency_count == 1
-
-
-def test_catalog_escapes_like_wildcards_and_filters_references(catalog_store):
-    _add_element(catalog_store, "literal-percent", source="legacy_manual")
-    with catalog_store.connection:
-        catalog_store.connection.execute(
-            """
-            UPDATE managed_elements
-            SET display_name = 'Literal 100% _ marker'
-            WHERE id = 'literal-percent'
-            """
-        )
-    catalog = ElementCatalog(catalog_store)
-
-    literal = catalog.list(ElementQuery(search="100% _"))
-    referenced = catalog.list(ElementQuery(referenced="yes"))
-    unreferenced = catalog.list(
-        ElementQuery(
-            source="legacy_manual",
-            referenced="no",
-        )
+    renamed = catalog.update_name(
+        created.id,
+        "  Primary   comment field  ",
+        created.revision,
+        7,
+        "admin",
     )
 
-    assert [item.id for item in literal.items] == ["literal-percent"]
-    assert [item.id for item in referenced.items] == ["healthy-00"]
-    assert [item.id for item in unreferenced.items] == ["literal-percent"]
+    assert renamed.display_name == "Primary comment field"
+    assert renamed.revision == created.revision + 1
+    assert catalog.draft(created.id) == before
+
+
+def test_catalog_rebind_replaces_definition_and_returns_draft(
+    catalog_store,
+):
+    catalog = ElementCatalog(
+        catalog_store,
+        element_id_factory=lambda: "element-rebind",
+    )
+    created = catalog.create_draft(_manual_payload(), 7, "admin")
+    replacement = _manual_payload(
+        display_name="Ignored by rebind",
+        page_key="feed",
+        url_pattern="https://www.tiktok.com/foryou*",
+        fingerprint={"tag": "button", "position_hint": {"x": 0.9}},
+        locators=[{"type": "xpath", "value": "//*[@data-e2e='comment-icon']"}],
+    )
+
+    rebound = catalog.rebind(
+        created.id,
+        {key: value for key, value in replacement.items() if key != "display_name"},
+        created.revision,
+        7,
+        "admin",
+    )
+
+    assert rebound.display_name == created.display_name
+    assert rebound.status == "draft"
+    assert rebound.page_key == "feed"
+    assert rebound.revision == created.revision + 1
+    assert catalog.draft(created.id)["locators"][0]["type"] == "xpath"
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"intent": "find comments"},
+        {"accepted_roles": ["button"]},
+        {"accepted_names": ["Comments"]},
+        {"scope": "active_video"},
+        {"probe_action": "inspect_only"},
+        {"xpath": "/html/body/button"},
+    ],
+)
+def test_catalog_rejects_semantic_unknown_and_unsafe_create_fields(
+    catalog_store,
+    changes,
+):
+    catalog = ElementCatalog(
+        catalog_store,
+        element_id_factory=lambda: "element-unsafe",
+    )
+
+    with pytest.raises(ValueError, match="invalid parameter shape"):
+        catalog.create_draft({**_manual_payload(), **changes}, 7, "admin")
+
+    assert catalog.get("element-unsafe") is None
+
+
+@pytest.mark.parametrize(
+    ("changes", "message"),
+    [
+        ({"target_origin": "http://www.tiktok.com"}, "target_origin"),
+        ({"target_origin": "https://example.com"}, "target_origin"),
+        ({"target_origin": "https://user@www.tiktok.com"}, "target_origin"),
+        ({"target_origin": "https://www.tiktok.com/path"}, "target_origin"),
+        ({"url_pattern": "https://example.com/*"}, "url_pattern"),
+        ({"url_pattern": "https://www.tiktok.com/*#secret"}, "url_pattern"),
+        ({"page_key": "bad page key"}, "page_key"),
+        ({"operation_steps": [{}] * 21}, "operation_steps"),
+        (
+            {
+                "locators": [
+                    {"type": "css", "value": f'[data-e2e="item-{index}"]'}
+                    for index in range(7)
+                ]
+            },
+            "locators",
+        ),
+        ({"locators": [{"type": "role", "value": "button"}]}, "locators"),
+        ({"locators": [{"type": "xpath", "value": "/html/body/button"}]}, "locators"),
+        ({"locators": [{"type": "css", "value": "button.primary"}]}, "locators"),
+        ({"fingerprint": {"text": "x" * 70000}}, "fingerprint"),
+    ],
+)
+def test_catalog_rejects_invalid_manual_definition(
+    catalog_store,
+    changes,
+    message,
+):
+    catalog = ElementCatalog(catalog_store)
+
+    with pytest.raises(ValueError, match=message):
+        catalog.create_draft(_manual_payload(**changes), 7, "admin")
+
+
+def test_catalog_normalizes_at_most_twenty_replay_steps(catalog_store):
+    steps = [
+        {
+            "sequence": index,
+            "locator": {
+                "type": "css",
+                "value": f'[data-e2e="step-{index}"]',
+            },
+            "url_before": "https://www.tiktok.com/foryou?private=1",
+            "url_after": "https://www.tiktok.com/foryou#comments",
+            "recorded_at": "2026-08-04T03:00:00+00:00",
+            "frame_key": "main",
+            "shadow": False,
+            "shadow_key": "",
+        }
+        for index in range(1, 21)
+    ]
+    catalog = ElementCatalog(catalog_store)
+
+    record = catalog.create_draft(
+        _manual_payload(operation_steps=steps),
+        7,
+        "admin",
+    )
+
+    saved = catalog.draft(record.id)["operation_steps"]
+    assert len(saved) == 20
+    assert saved[0]["sequence"] == 1
+    assert saved[0]["url_before"] == "https://www.tiktok.com/foryou"
+    assert saved[-1]["sequence"] == 20
+
+
+def test_catalog_revision_and_dependency_guards(catalog_store):
+    catalog = ElementCatalog(
+        catalog_store,
+        element_id_factory=lambda: "element-guarded",
+    )
+    created = catalog.create_draft(_manual_payload(), 7, "admin")
+
+    with pytest.raises(StaleElementRevisionError):
+        catalog.update_name(
+            created.id,
+            "Changed",
+            created.revision + 1,
+            7,
+            "admin",
+        )
+
+    catalog_store.replace_strategy_dependencies(
+        [
+            (
+                created.id,
+                "comment-flow",
+                "open-comments",
+                "click",
+                "Comment flow",
+            )
+        ]
+    )
+    with pytest.raises(ElementHasDependenciesError):
+        catalog.delete(created.id, created.revision, 7, "admin")
+
+    assert catalog.get(created.id) is not None
+
+
+def test_catalog_lists_and_filters_new_statuses(catalog_store):
+    catalog = ElementCatalog(
+        catalog_store,
+        element_id_factory=iter(("element-a", "element-b")).__next__,
+    )
+    catalog.create_draft(
+        _manual_payload(display_name="Alpha"),
+        7,
+        "admin",
+    )
+    catalog.create_draft(
+        _manual_payload(display_name="Beta"),
+        7,
+        "admin",
+    )
+
+    result = catalog.list(ElementQuery(status="draft", search="Alpha"))
+
+    assert result.total == 1
+    assert [item.display_name for item in result.items] == ["Alpha"]
+    assert result.revision >= 2
 
 
 @pytest.mark.parametrize(
@@ -230,9 +344,7 @@ def test_catalog_escapes_like_wildcards_and_filters_references(catalog_store):
         ElementQuery(page=0),
         ElementQuery(page=True),
         ElementQuery(page_size=21),
-        ElementQuery(status="missing"),
-        ElementQuery(source="missing"),
-        ElementQuery(scope="missing"),
+        ElementQuery(status="failed"),
         ElementQuery(referenced="missing"),
     ],
 )
@@ -241,270 +353,15 @@ def test_catalog_rejects_invalid_queries(catalog_store, query):
         ElementCatalog(catalog_store).list(query)
 
 
-def test_catalog_get_returns_immutable_record_or_none(catalog_store):
+def test_catalog_definition_is_bounded_json(catalog_store):
     catalog = ElementCatalog(catalog_store)
+    payload = _manual_payload()
 
-    record = catalog.get("healthy-00")
+    record = catalog.create_draft(payload, 7, "admin")
+    serialized = json.dumps(
+        catalog.draft(record.id),
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
 
-    assert record is not None
-    assert record.id == "healthy-00"
-    assert record.dependency_count == 1
-    assert catalog.get("missing-element") is None
-
-
-def test_catalog_revision_and_element_revision_advance_together(catalog_store):
-    catalog = ElementCatalog(catalog_store)
-    before = catalog.list(ElementQuery())
-    current = catalog.get("healthy-00")
-
-    _add_element(catalog_store, "healthy-00", published_status="using_lkg")
-    after = catalog.list(ElementQuery())
-    updated = catalog.get("healthy-00")
-
-    assert after.revision == before.revision + 1
-    assert updated.revision == current.revision + 1
-    assert updated.runtime_status == "using_lkg"
-
-
-@pytest.mark.parametrize(
-    "query",
-    [
-        ElementQuery(page=True),
-        ElementQuery(page_size=True),
-        ElementQuery(page=1 << 63),
-        ElementQuery(page_size=1 << 100),
-    ],
-)
-def test_catalog_rejects_non_sqlite_pagination_before_query(query):
-    class QueryMustNotRun:
-        def list_managed_element_rows(self, **_kwargs):
-            raise AssertionError("invalid pagination reached SQLite")
-
-    with pytest.raises(ValueError, match=r"^invalid_pagination$"):
-        ElementCatalog(QueryMustNotRun()).list(query)
-
-
-def test_catalog_create_and_update_normalize_contract_and_audit_actor(tmp_path):
-    with SelectorProbeStore(tmp_path / "selector-probe.db") as store:
-        catalog = ElementCatalog(
-            store,
-            element_id_factory=lambda: "element-fixed",
-        )
-
-        created = catalog.create_draft(
-            _draft_payload(display_name="  Share   entry  "),
-            41,
-            "admin-user",
-        )
-        draft = catalog.draft(created.id)
-        updated = catalog.update_draft(
-            created.id,
-            {
-                "contract": {
-                    **draft["contract"],
-                    "intent": "find the visible share entry",
-                }
-            },
-            created.revision,
-            41,
-            "admin-user",
-        )
-        audits = store.connection.execute(
-            """
-            SELECT event_type, actor_user_id, actor_username, target_id
-            FROM selector_management_audit_events
-            ORDER BY id
-            """
-        ).fetchall()
-
-        assert created.id == "element-fixed"
-        assert created.display_name == "Share entry"
-        assert created.draft_status == "draft"
-        assert draft["contract"]["accepted_names"] == {
-            "mode": "exact",
-            "values": ["Share"],
-        }
-        assert updated.revision == created.revision + 1
-        assert [tuple(row) for row in audits] == [
-            ("element_created", 41, "admin-user", "element-fixed"),
-            ("element_draft_updated", 41, "admin-user", "element-fixed"),
-        ]
-
-
-@pytest.mark.parametrize(
-    "unsafe",
-    [
-        {"xpath": "/html/body/button"},
-        {"javascript": "javascript:alert(1)"},
-        {"coordinates": {"x": 10, "y": 20}},
-        {"id": "caller-controlled"},
-    ],
-)
-def test_catalog_rejects_unknown_or_unsafe_create_fields_before_write(
-    tmp_path,
-    unsafe,
-):
-    with SelectorProbeStore(tmp_path / "selector-probe.db") as store:
-        catalog = ElementCatalog(
-            store,
-            element_id_factory=lambda: "element-unsafe",
-        )
-
-        with pytest.raises(ValueError, match="invalid parameter shape"):
-            catalog.create_draft(
-                {**_draft_payload(), **unsafe},
-                41,
-                "admin-user",
-            )
-
-        assert catalog.get("element-unsafe") is None
-        assert store.catalog_revision() == 0
-
-
-def test_catalog_update_and_delete_use_revision_and_dependency_guards(tmp_path):
-    with SelectorProbeStore(tmp_path / "selector-probe.db") as store:
-        catalog = ElementCatalog(
-            store,
-            element_id_factory=lambda: "element-guarded",
-        )
-        created = catalog.create_draft(
-            _draft_payload(),
-            41,
-            "admin-user",
-        )
-        contract = catalog.draft(created.id)["contract"]
-
-        with pytest.raises(StaleElementRevisionError):
-            catalog.update_draft(
-                created.id,
-                {"contract": contract},
-                created.revision + 1,
-                41,
-                "admin-user",
-            )
-
-        store.replace_strategy_dependencies(
-            [
-                (
-                    created.id,
-                    "share-flow",
-                    "open-share",
-                    "click",
-                    "Share flow",
-                )
-            ]
-        )
-        with pytest.raises(ElementHasDependenciesError):
-            catalog.delete(
-                created.id,
-                created.revision,
-                41,
-                "admin-user",
-            )
-
-        assert catalog.get(created.id) is not None
-
-
-def test_catalog_mutation_rolls_back_when_local_audit_write_fails(tmp_path):
-    with SelectorProbeStore(tmp_path / "selector-probe.db") as store:
-        catalog = ElementCatalog(
-            store,
-            element_id_factory=lambda: "element-atomic",
-        )
-        created = catalog.create_draft(
-            _draft_payload(),
-            41,
-            "admin-user",
-        )
-        original_contract = catalog.draft(created.id)["contract"]
-        store.connection.execute(
-            """
-            CREATE TRIGGER reject_element_update_audit
-            BEFORE INSERT ON selector_management_audit_events
-            WHEN NEW.event_type = 'element_draft_updated'
-            BEGIN
-                SELECT RAISE(ABORT, 'audit unavailable');
-            END
-            """
-        )
-        store.connection.commit()
-
-        with pytest.raises(sqlite3.IntegrityError, match="audit unavailable"):
-            catalog.update_draft(
-                created.id,
-                {
-                    "contract": {
-                        **original_contract,
-                        "intent": "changed intent",
-                    }
-                },
-                created.revision,
-                41,
-                "admin-user",
-            )
-
-        assert catalog.get(created.id).revision == created.revision
-        assert catalog.draft(created.id)["contract"] == original_contract
-
-
-def test_catalog_legacy_migration_preserves_locator_and_dependencies(tmp_path):
-    legacy_xpath = "/html/body/main/div[2]/button"
-    with SelectorProbeStore(tmp_path / "selector-probe.db") as store:
-        store.replace_strategy_dependencies(
-            [
-                (
-                    "legacy-share",
-                    "share-flow",
-                    "open-share",
-                    "click",
-                    "Share flow",
-                )
-            ]
-        )
-        catalog = ElementCatalog(
-            store,
-            legacy_elements_provider=lambda: {
-                "legacy-share": legacy_xpath
-            },
-        )
-        before_migration = catalog.list(ElementQuery())
-        legacy_record = catalog.get("legacy-share")
-        dependencies_before = [
-            tuple(row)
-            for row in store.dependency_rows_for_aliases(["legacy-share"])
-        ]
-
-        assert before_migration.total == 1
-        assert before_migration.items[0].migration_available is True
-        assert legacy_record is not None
-        assert legacy_record.management_source == "legacy_manual"
-        assert legacy_record.draft_status is None
-        assert legacy_record.revision == 0
-        assert legacy_record.dependency_count == 1
-
-        migrated = catalog.create_legacy_migration(
-            "legacy-share",
-            41,
-            "admin-user",
-            expected_revision=0,
-        )
-
-        assert migrated.management_source == "legacy_manual"
-        assert migrated.migration_available is False
-        assert migrated.draft_status == "draft"
-        assert catalog.draft("legacy-share")["candidates"][0]["value"] == legacy_xpath
-        assert [
-            tuple(row)
-            for row in store.dependency_rows_for_aliases(["legacy-share"])
-        ] == dependencies_before
-        with pytest.raises(ElementMigrationConflictError):
-            catalog.create_legacy_migration(
-                "legacy-share",
-                41,
-                "admin-user",
-                expected_revision=migrated.revision,
-            )
-        assert (
-            catalog.draft("legacy-share")["candidates"][0]["value"]
-            == legacy_xpath
-        )
+    assert len(serialized) < 65536

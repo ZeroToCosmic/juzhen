@@ -7,6 +7,7 @@ import pytest
 import launcher as launcher_module
 from launcher import (
     CheckResult,
+    CommentCampaignWorkerSupervisor,
     FlaskServiceSupervisor,
     LauncherApp,
     SelectorProbeWorkerSupervisor,
@@ -434,6 +435,48 @@ def test_selector_probe_supervisor_starts_hidden_worker(tmp_path):
     assert calls[0]["stdout"].closed is True
 
 
+def test_comment_campaign_worker_supervisor_starts_hidden_worker(tmp_path):
+    process = FakeProcess()
+    calls = []
+    supervisor = CommentCampaignWorkerSupervisor(
+        popen_factory=lambda command, **kwargs: calls.append((command, kwargs)) or process,
+        log_path=tmp_path / "campaign-worker.log",
+    )
+
+    supervisor.start(environment={"COMMENT_CAMPAIGN_REDIS_URL": "redis://127.0.0.1/0"})
+
+    assert calls[0][0][-3:] == ["-m", "comment_campaign.worker", "serve"]
+    assert calls[0][1]["creationflags"] == launcher_module.subprocess.CREATE_NO_WINDOW
+    assert calls[0][1]["env"] == {"COMMENT_CAMPAIGN_REDIS_URL": "redis://127.0.0.1/0"}
+    supervisor.stop()
+
+
+def test_restart_cleans_up_when_comment_campaign_worker_exits_early(monkeypatch):
+    events = []
+    statuses = []
+    launcher = launcher_for_restart(events)
+    launcher.comment_campaign_worker = RecordingSupervisor(events, "campaign")
+    launcher.comment_campaign_worker.log_path = Path("data/logs/comment-campaign-worker.log")
+    launcher.comment_campaign_worker.current_state = {"running": False, "pid": None, "returncode": 12}
+    launcher.results = [CheckResult("environment", True, "passed")]
+    launcher.check_completed = True
+    launcher._set_status = statuses.append
+    monkeypatch.setattr("launcher.stop_port_listeners", lambda port: events.append(f"port-stop:{port}"))
+    monkeypatch.setattr("launcher.webbrowser.open", lambda _url: events.append("browser"))
+    monkeypatch.setattr("launcher.messagebox.showerror", lambda *_args: None)
+
+    assert launcher._restart_services(run_checks=False) is False
+
+    assert events == [
+        "flask-stop", "worker-stop", "probe-stop", "campaign-stop", "port-stop:5000",
+        "flask-start", "worker-start", "probe-start", "campaign-start", "health",
+        "worker-state", "probe-state", "campaign-state",
+        "flask-stop", "worker-stop", "probe-stop", "campaign-stop",
+    ]
+    assert "browser" not in events
+    assert "campaign-worker.log" in statuses[0]
+
+
 def test_selector_probe_supervisor_requests_cooperative_stop_before_terminate(tmp_path):
     stop_file = tmp_path / "probe.stop"
 
@@ -504,25 +547,29 @@ def test_flask_supervisor_owns_one_process_and_stops_it():
 
 
 class RecordingSupervisor:
-    def __init__(self, events, name):
+    def __init__(self, events, name, *, record=True):
         self.events = events
         self.name = name
+        self.record = record
         self.process = SimpleNamespace(poll=lambda: None)
         self.current_state = {"running": True, "pid": 4321, "returncode": None}
         self.log_path = Path(f"data/logs/{name}-service.log")
         self.stop_error = None
 
     def stop(self):
-        self.events.append(f"{self.name}-stop")
+        if self.record:
+            self.events.append(f"{self.name}-stop")
         if self.stop_error is not None:
             raise self.stop_error
 
     def start(self, environment=None):
-        self.events.append(f"{self.name}-start")
+        if self.record:
+            self.events.append(f"{self.name}-start")
         return self.process
 
     def state(self):
-        self.events.append(f"{self.name}-state")
+        if self.record:
+            self.events.append(f"{self.name}-state")
         return self.current_state
 
 
@@ -531,6 +578,7 @@ def launcher_for_restart(events):
     launcher.flask_service = RecordingSupervisor(events, "flask")
     launcher.statistics_worker = RecordingSupervisor(events, "worker")
     launcher.selector_probe_worker = RecordingSupervisor(events, "probe")
+    launcher.comment_campaign_worker = RecordingSupervisor(events, "campaign", record=False)
     launcher.root = SimpleNamespace(after=lambda _delay, callback: callback())
     launcher._render = lambda _results: None
     launcher._set_status = lambda _message: None
@@ -638,7 +686,8 @@ def test_restart_reports_and_does_not_start_when_cleanup_fails(
         "\u81ea\u52a8\u542f\u52a8\u5931\u8d25\uff1b"
         f"Flask \u65e5\u5fd7\uff1a{Path('data/logs/flask-service.log')}\uff1b"
         f"\u7edf\u8ba1\u670d\u52a1\u65e5\u5fd7\uff1a{Path('data/logs/worker-service.log')}\uff1b"
-        f"\u63a2\u9488\u670d\u52a1\u65e5\u5fd7\uff1a{Path('data/logs/probe-service.log')}"
+        f"\u63a2\u9488\u670d\u52a1\u65e5\u5fd7\uff1a{Path('data/logs/probe-service.log')}\uff1b"
+        f"\u8bc4\u8bba Campaign Worker \u65e5\u5fd7\uff1a{Path('data/logs/campaign-service.log')}"
     ]
     assert dialogs == [("\u670d\u52a1\u542f\u52a8\u5931\u8d25", statuses[0])]
 
@@ -913,18 +962,22 @@ def test_begin_restart_reports_exceptions_with_fixed_whitelist_message(
         "\u81ea\u52a8\u542f\u52a8\u5931\u8d25\uff1b"
         f"Flask \u65e5\u5fd7\uff1a{Path('data/logs/flask-service.log')}\uff1b"
         f"\u7edf\u8ba1\u670d\u52a1\u65e5\u5fd7\uff1a{Path('data/logs/worker-service.log')}\uff1b"
-        f"\u63a2\u9488\u670d\u52a1\u65e5\u5fd7\uff1a{Path('data/logs/probe-service.log')}"
+        f"\u63a2\u9488\u670d\u52a1\u65e5\u5fd7\uff1a{Path('data/logs/probe-service.log')}\uff1b"
+        f"\u8bc4\u8bba Campaign Worker \u65e5\u5fd7\uff1a{Path('data/logs/campaign-service.log')}"
     ]
 
 
 def test_launcher_close_stops_all_services_before_destroy():
     events = []
     launcher = launcher_for_restart(events)
+    launcher.comment_campaign_worker = RecordingSupervisor(events, "campaign")
     launcher.root = SimpleNamespace(destroy=lambda: events.append("destroy"))
 
     launcher.close()
 
-    assert events == ["flask-stop", "worker-stop", "probe-stop", "destroy"]
+    assert events == [
+        "flask-stop", "worker-stop", "probe-stop", "campaign-stop", "destroy"
+    ]
 
 
 @pytest.mark.parametrize(

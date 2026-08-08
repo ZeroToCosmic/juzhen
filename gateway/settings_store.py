@@ -35,6 +35,18 @@ _PRESERVE_BLANK_KEYS = {
 _REPLACE_ON_UPDATE_PATHS = {
     ("browser", "action_elements"),
 }
+_SELECTOR_PROBE_KEYS = (
+    "enabled",
+    "rollout_mode",
+    "schedule_time",
+    "timezone",
+    "target_origin",
+    "test_profile_ids",
+    "dedicated_test_profile_ids",
+    "page_timeout_seconds",
+    "redis",
+    "webhook",
+)
 
 
 DEFAULT_SETTINGS = {
@@ -132,14 +144,18 @@ DEFAULT_SETTINGS = {
     },
     "selector_probe": {
         "enabled": False,
-        "site": "tiktok",
-        "environment": "production",
+        "rollout_mode": "observe",
         "timezone": "Asia/Shanghai",
-        "daily_time": "03:00",
-        "target_url": "https://www.tiktok.com/",
+        "schedule_time": "03:00",
+        "target_origin": "https://www.tiktok.com",
         "test_profile_ids": [],
-        "model_id": "",
-        "observe_only": True,
+        "dedicated_test_profile_ids": [],
+        "page_timeout_seconds": 90,
+        "redis": {
+            "url": "",
+            "namespace": "selector_registry",
+            "password": "",
+        },
         "webhook": {
             "enabled": False,
             "type": "generic",
@@ -230,6 +246,7 @@ def load_settings(path=None) -> dict:
 def _load_settings(path=None) -> dict:
     config_path = get_config_path(path)
     loaded = _read_config(config_path)
+    _normalize_selector_probe_settings(loaded)
 
     settings = merge_settings(loaded)
     _normalize_runtime_settings(settings)
@@ -277,7 +294,9 @@ def save_settings(settings: dict, path=None) -> dict:
 
 
 def _save_settings(settings: dict, path=None) -> dict:
-    merged = merge_settings(settings)
+    submitted = copy.deepcopy(settings)
+    _normalize_selector_probe_settings(submitted)
+    merged = merge_settings(submitted)
     _normalize_runtime_settings(merged)
     _normalize_proxy_pool(merged)
     config_path = get_config_path(path)
@@ -576,6 +595,50 @@ def _normalize_runtime_settings(settings: dict) -> None:
             raise ValueError
     except (TypeError, ValueError):
         sampling["min_age_hours"] = 24
+
+    _normalize_selector_probe_settings(settings)
+
+
+def _normalize_selector_probe_settings(settings: dict) -> None:
+    if not isinstance(settings, dict):
+        return
+    raw_probe = settings.get("selector_probe")
+    if raw_probe is None:
+        return
+    if not isinstance(raw_probe, dict):
+        raw_probe = {}
+
+    canonical = {
+        key: copy.deepcopy(raw_probe[key])
+        for key in _SELECTOR_PROBE_KEYS
+        if key in raw_probe
+    }
+    if "schedule_time" not in canonical and "daily_time" in raw_probe:
+        canonical["schedule_time"] = raw_probe["daily_time"]
+    if "target_origin" not in canonical and "target_url" in raw_probe:
+        canonical["target_origin"] = raw_probe["target_url"]
+    if "rollout_mode" not in canonical:
+        canonical["rollout_mode"] = (
+            "observe" if raw_probe.get("observe_only") is not False else "publish"
+        )
+    if "dedicated_test_profile_ids" not in canonical:
+        canonical["dedicated_test_profile_ids"] = copy.deepcopy(
+            raw_probe.get("test_profile_ids", [])
+        )
+    canonical["page_timeout_seconds"] = _normalized_probe_page_timeout(
+        canonical.get("page_timeout_seconds", 90)
+    )
+    settings["selector_probe"] = canonical
+
+
+def _normalized_probe_page_timeout(value: object) -> int:
+    if isinstance(value, bool):
+        return 90
+    try:
+        result = int(value)
+    except (TypeError, ValueError):
+        return 90
+    return result if 10 <= result <= 300 else 90
 
 
 def _deep_merge_preserving_credentials(base: dict, overrides: dict, path: tuple[str, ...] = ()) -> None:

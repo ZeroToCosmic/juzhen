@@ -73,12 +73,19 @@ _READINESS_SAMPLE_SCRIPT = r"""
     root_visible: visible(root) && visible(body),
     blocked_marker: firstVisible(blockers),
     skeleton_count: skeletons.length,
-    feed_visible: Boolean(firstVisible([
-      "video",
-      "main",
-      '[data-e2e*="feed" i]',
-      '[data-e2e*="recommend" i]'
-    ])),
+    feed_visible: Boolean(
+      firstVisible([
+        "video",
+        '[data-e2e*="feed" i]',
+        '[data-e2e*="recommend" i]'
+      ]) && firstVisible([
+        '[data-e2e="comment-icon"]',
+        '[data-e2e="like-icon"]',
+        '[data-e2e="share-icon"]',
+        'button[aria-label*="comment" i]',
+        '[role="button"][aria-label*="comment" i]'
+      ])
+    ),
     fingerprints
   };
 }

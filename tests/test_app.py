@@ -6705,6 +6705,54 @@ def test_block_strategy_text_resolver_handles_fixed_and_brand_copy(monkeypatch):
     assert calls == ["brand-1"]
 
 
+def test_v2_content_library_provider_returns_metadata_only(monkeypatch):
+    app_module = importlib.import_module("gateway.app")
+    monkeypatch.setattr(
+        app_module,
+        "list_brands",
+        lambda _data_dir: [
+            {"id": "ofs", "name": "OFS", "copy_count": 40, "updated_at": "secret"}
+        ],
+    )
+
+    provider = app_module.build_execution_v2_content_library_provider("unused")
+
+    assert asyncio.run(provider()) == [
+        {"id": "ofs", "name": "OFS", "copy_count": 40}
+    ]
+
+
+def test_v2_text_resolver_picks_from_requested_library(monkeypatch):
+    app_module = importlib.import_module("gateway.app")
+    calls = []
+    monkeypatch.setattr(
+        app_module,
+        "list_copy_items",
+        lambda _data_dir, brand_id: calls.append(brand_id)
+        or [{"body": "first"}, {"body": "second"}],
+    )
+    resolver = app_module.build_execution_v2_text_resolver(
+        "unused",
+        rng=type("Rng", (), {"choice": lambda _self, values: values[-1]})(),
+    )
+
+    assert asyncio.run(resolver({"content_library_id": "ofs"})) == "second"
+    assert calls == ["ofs"]
+
+
+def test_v2_text_resolver_rejects_missing_or_empty_library(monkeypatch):
+    app_module = importlib.import_module("gateway.app")
+    from execution_v2.actions import ActionExecutionError
+
+    monkeypatch.setattr(app_module, "list_copy_items", lambda _data_dir, _brand_id: [])
+    resolver = app_module.build_execution_v2_text_resolver("unused")
+
+    for action in ({"content_library_id": ""}, {"content_library_id": "empty"}):
+        with pytest.raises(ActionExecutionError, match="content_library_unavailable") as error:
+            asyncio.run(resolver(action))
+        assert getattr(error.value, "code", "") == "content_library_unavailable"
+
+
 def _reset_pattern_recording_state(app_module):
     app_module.ACTIVE_PATTERN_RECORDINGS.clear()
     app_module.ACTIVE_BROWSER_SESSIONS.clear()

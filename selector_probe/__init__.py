@@ -1,10 +1,12 @@
 from .config import ProbeConfig, WebhookConfig, normalize_probe_config
-from .probe import run_healing_probe, run_observe_probe
+from .managed_runtime import ManagedElementRuntime, ManagedProbeRuntime
+from .probe import run_managed_probe
 
 __all__ = [
     "ProbeConfig",
     "WebhookConfig",
+    "ManagedElementRuntime",
+    "ManagedProbeRuntime",
     "normalize_probe_config",
-    "run_healing_probe",
-    "run_observe_probe",
+    "run_managed_probe",
 ]

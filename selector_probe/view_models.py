@@ -7,6 +7,8 @@ from dataclasses import dataclass
 import math
 import re
 
+from selector_probe.inventory import normalize_recorded_step
+
 
 _PROFILE_MASK = re.compile(r"^\*\*\*(?:.{4})?$", re.DOTALL)
 _SENSITIVE_PARTS = (
@@ -16,6 +18,7 @@ _SENSITIVE_PARTS = (
     "html",
     "model",
     "prompt",
+    "profile",
     "raw",
     "secret",
     "token",
@@ -35,59 +38,16 @@ _DEPENDENCY_FIELDS = (
     "action_id",
     "action_type",
 )
-_REQUEST_RESULT_FIELDS = (
-    "status",
-    "failure_code",
-    "version",
-    "new_version",
-    "published",
-    "reconciled",
-)
-_REQUEST_ROUND_FIELDS = (
-    "profile_mask",
-    "round_number",
-    "result",
-    "status",
-    "failure_code",
-    "page_state",
-    "match_count",
-    "role_name_result",
-    "visible",
-    "in_viewport",
-    "actionable",
-    "postcondition_result",
-    "started_at",
-    "finished_at",
-)
-_REQUEST_REPAIR_FIELDS = (
-    "attempt",
-    "previous_method",
-    "failure_code",
-    "match_count",
-    "new_method",
-    "prompt_version",
-    "model_id",
-    "result",
-)
-
-
 @dataclass(frozen=True)
 class ElementRecord:
     id: str
     display_name: str
-    management_source: str
-    published_status: str
-    draft_status: str | None
-    scope: str
+    status: str
+    page_key: str
     primary_locator_type: str
     dependency_count: int
     last_validated_at: str | None
     revision: int
-    migration_available: bool = False
-
-    @property
-    def runtime_status(self) -> str:
-        return self.draft_status or self.published_status
 
 
 def public_element_summary(record: ElementRecord) -> dict[str, object]:
@@ -96,42 +56,163 @@ def public_element_summary(record: ElementRecord) -> dict[str, object]:
     return {
         "id": record.id,
         "display_name": record.display_name,
-        "management_source": record.management_source,
-        "published_status": record.published_status,
-        "draft_status": record.draft_status,
-        "runtime_status": record.runtime_status,
-        "scope": record.scope,
+        "status": record.status,
+        "page_key": record.page_key,
         "primary_locator_type": record.primary_locator_type,
         "dependency_count": record.dependency_count,
         "last_validated_at": record.last_validated_at,
         "revision": record.revision,
-        "migration_available": record.migration_available,
     }
 
 
 def public_element_detail(
     record: ElementRecord,
-    evidence: object,
+    definition: object,
     dependencies: object,
     *,
-    candidate_comparison: object = None,
-    repairs: object = None,
+    validation: object = None,
     history: object = None,
+    alerts: object = None,
+    strategy_controls: object = None,
 ) -> dict[str, object]:
     payload = public_element_summary(record)
-    payload["evidence"] = _public_evidence(evidence)
+    payload["definition"] = _public_manual_definition(definition)
     payload["dependencies"] = _public_dependencies(dependencies)
-    comparison = _public_candidate_comparison(candidate_comparison)
-    payload["candidate_comparison"] = comparison
-    payload["deterministic_candidates"] = comparison["deterministic"]
-    payload["repaired_candidates"] = comparison["repaired"]
-    payload["repairs"] = _public_request_records(
-        repairs,
-        _REQUEST_REPAIR_FIELDS,
-        maximum=3,
-    )
+    payload["validation"] = _public_details(validation, depth=0) or {}
     payload["history"] = _public_version_history(history)
+    payload["alerts"] = _public_sequence_details(alerts, maximum=100)
+    controls = _public_details(strategy_controls, depth=0)
+    payload["strategy_controls"] = (
+        controls if isinstance(controls, Mapping) else {}
+    )
     return payload
+
+
+def _public_manual_definition(value: object) -> dict[str, object] | None:
+    if value is None:
+        return None
+    if not isinstance(value, Mapping):
+        return None
+    result: dict[str, object] = {}
+    for field, maximum in (
+        ("page_key", 120),
+        ("target_origin", 255),
+        ("url_pattern", 2000),
+    ):
+        selected = value.get(field)
+        if isinstance(selected, str):
+            result[field] = selected[:maximum]
+    steps: list[dict[str, object]] = []
+    raw_steps = value.get("operation_steps")
+    if isinstance(raw_steps, Sequence) and not isinstance(
+        raw_steps, (str, bytes, bytearray)
+    ):
+        for raw in raw_steps[:20]:
+            try:
+                steps.append(normalize_recorded_step(raw))
+            except ValueError:
+                continue
+    result["operation_steps"] = steps
+    result["fingerprint"] = _public_fingerprint(value.get("fingerprint"))
+    locators: list[dict[str, str]] = []
+    raw_locators = value.get("locators")
+    if isinstance(raw_locators, Sequence) and not isinstance(
+        raw_locators, (str, bytes, bytearray)
+    ):
+        for raw in raw_locators[:6]:
+            if not isinstance(raw, Mapping):
+                continue
+            try:
+                selected = normalize_recorded_step(
+                    {"sequence": 1, "locator": raw}
+                )["locator"]
+            except ValueError:
+                continue
+            locators.append(
+                {
+                    "type": str(selected["type"]),
+                    "value": str(selected["value"]),
+                }
+            )
+    result["locators"] = locators
+    return result
+
+
+def _public_fingerprint(value: object) -> dict[str, object]:
+    """Project display metadata without accepting arbitrary nested data."""
+
+    if not isinstance(value, Mapping):
+        return {}
+    result: dict[str, object] = {}
+    for field, maximum in (
+        ("tag", 24),
+        ("input_type", 32),
+        ("role", 48),
+        ("name", 160),
+        ("frame_key", 120),
+        ("shadow_key", 160),
+    ):
+        selected = value.get(field)
+        if isinstance(selected, str):
+            result[field] = selected.replace("\x00", "")[:maximum]
+    if isinstance(value.get("shadow"), bool):
+        result["shadow"] = value["shadow"]
+    raw_attributes = value.get("attributes")
+    attributes: dict[str, str] = {}
+    if isinstance(raw_attributes, Mapping):
+        for key in (
+            "data-e2e",
+            "data-testid",
+            "id",
+            "name",
+            "placeholder",
+            "aria-label",
+            "contenteditable",
+            "type",
+            "tabindex",
+        ):
+            selected = raw_attributes.get(key)
+            if isinstance(selected, str):
+                attributes[key] = selected.replace("\x00", "")[:160]
+    if attributes:
+        result["attributes"] = attributes
+    for field in ("region", "position_hint"):
+        selected = _public_normalized_region(value.get(field))
+        if selected:
+            result[field] = selected
+    return result
+
+
+def _public_normalized_region(value: object) -> dict[str, float]:
+    if not isinstance(value, Mapping):
+        return {}
+    result: dict[str, float] = {}
+    for field in ("x", "y", "width", "height"):
+        selected = value.get(field)
+        if (
+            isinstance(selected, (int, float))
+            and not isinstance(selected, bool)
+            and math.isfinite(float(selected))
+            and 0 <= float(selected) <= 1
+        ):
+            result[field] = float(selected)
+    return result if len(result) == 4 else {}
+
+
+def _public_sequence_details(
+    value: object,
+    *,
+    maximum: int,
+) -> list[object]:
+    if not isinstance(value, Sequence) or isinstance(
+        value, (str, bytes, bytearray)
+    ):
+        return []
+    return [
+        selected
+        for item in value[:maximum]
+        if (selected := _public_details(item, depth=0)) is not None
+    ]
 
 
 def public_error(
@@ -148,110 +229,6 @@ def public_error(
     if sanitized not in (None, {}, []):
         error["details"] = sanitized
     return {"error": error}
-
-
-def public_element_request(value: object) -> dict[str, object]:
-    if not isinstance(value, Mapping):
-        raise TypeError("element request must be a mapping")
-    result: dict[str, object] = {}
-    for field in ("request_id", "request_type", "element_id", "status"):
-        selected = value.get(field)
-        if isinstance(selected, str):
-            result[field] = selected[:128]
-    attempt_count = value.get("attempt_count")
-    result["attempt_count"] = (
-        attempt_count
-        if isinstance(attempt_count, int)
-        and not isinstance(attempt_count, bool)
-        and attempt_count >= 0
-        else 0
-    )
-    error_code = value.get("error_code")
-    result["error_code"] = (
-        error_code[:128] if isinstance(error_code, str) else ""
-    )
-    result["result"] = _public_element_request_result(value.get("result"))
-    return result
-
-
-def _public_element_request_result(value: object) -> dict[str, object]:
-    if not isinstance(value, Mapping):
-        return {}
-    result: dict[str, object] = {}
-    for field in _REQUEST_RESULT_FIELDS:
-        selected = value.get(field)
-        if isinstance(selected, bool):
-            result[field] = selected
-        elif isinstance(selected, str):
-            result[field] = selected[:128]
-    candidate = value.get("candidate")
-    if isinstance(candidate, Mapping):
-        scope = candidate.get("scope")
-        locators = candidate.get("locators")
-        if isinstance(scope, str) and isinstance(locators, Sequence):
-            result["candidate"] = {
-                "scope": scope[:64],
-                "locators": [
-                    locator
-                    for raw in locators[:20]
-                    if (locator := _public_request_locator(raw))
-                ],
-            }
-    result["rounds"] = _public_request_records(
-        value.get("rounds"),
-        _REQUEST_ROUND_FIELDS,
-        maximum=20,
-    )
-    result["repairs"] = _public_request_records(
-        value.get("repairs"),
-        _REQUEST_REPAIR_FIELDS,
-        maximum=3,
-    )
-    return result
-
-
-def _public_request_locator(value: object) -> dict[str, object]:
-    if not isinstance(value, Mapping):
-        return {}
-    result: dict[str, object] = {}
-    for field in (
-        "id",
-        "type",
-        "name",
-        "value",
-        "role",
-        "name_mode",
-        "enabled",
-        "fallback",
-    ):
-        selected = value.get(field)
-        if isinstance(selected, bool):
-            result[field] = selected
-        elif isinstance(selected, str):
-            result[field] = selected[:500]
-    descendant = _public_request_locator(value.get("descendant"))
-    if descendant:
-        result["descendant"] = descendant
-    return result
-
-
-def _public_candidate_comparison(value: object) -> dict[str, object]:
-    selected = value if isinstance(value, Mapping) else {}
-    result: dict[str, object] = {}
-    for kind in ("active", "deterministic", "repaired"):
-        raw_locators = selected.get(kind)
-        if not isinstance(raw_locators, Sequence) or isinstance(
-            raw_locators,
-            (str, bytes, bytearray),
-        ):
-            result[kind] = []
-            continue
-        result[kind] = [
-            locator
-            for raw in raw_locators[:20]
-            if (locator := _public_request_locator(raw))
-        ]
-    return result
 
 
 def _public_version_history(value: object) -> list[dict[str, object]]:
@@ -285,34 +262,6 @@ def _public_version_history(value: object) -> list[dict[str, object]]:
                 item[field] = None
         if item.get("version_id"):
             result.append(item)
-    return result
-
-
-def _public_request_records(
-    value: object,
-    fields: Sequence[str],
-    *,
-    maximum: int,
-) -> list[dict[str, object]]:
-    if not isinstance(value, Sequence) or isinstance(
-        value,
-        (str, bytes, bytearray),
-    ):
-        return []
-    result: list[dict[str, object]] = []
-    for raw in value[:maximum]:
-        if not isinstance(raw, Mapping):
-            continue
-        item: dict[str, object] = {}
-        for field in fields:
-            selected = raw.get(field)
-            if isinstance(selected, bool):
-                item[field] = selected
-            elif isinstance(selected, int):
-                item[field] = selected
-            elif isinstance(selected, str):
-                item[field] = selected[:128]
-        result.append(item)
     return result
 
 
@@ -412,7 +361,6 @@ def _bounded_text(value: object, name: str, *, maximum: int) -> str:
 __all__ = [
     "ElementRecord",
     "public_element_detail",
-    "public_element_request",
     "public_element_summary",
     "public_error",
 ]

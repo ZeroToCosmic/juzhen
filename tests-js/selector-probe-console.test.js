@@ -58,29 +58,40 @@ function harness(overrides = {}) {
   };
 }
 
-test("declares the exact seven management tabs", () => {
+test("declares the exact four management menus", () => {
   const {ui} = harness();
   assert.deepEqual(
     TABS.map(({id, label}) => [id, label]),
     [
-      ["overview", "总览"],
-      ["elements", "元素"],
-      ["gates", "策略闸门"],
-      ["runs", "探针运行"],
-      ["versions", "版本"],
-      ["alerts", "告警"],
-      ["settings", "设置"],
+      ["collect", "采集元素"],
+      ["managed", "已选元素"],
+      ["operations", "运行与告警"],
+      ["settings", "系统设置"],
     ],
   );
   assert.deepEqual(ui.tabs, [
-    "overview",
-    "elements",
-    "gates",
-    "runs",
-    "versions",
-    "alerts",
+    "collect",
+    "managed",
+    "operations",
     "settings",
   ]);
+});
+
+test("console source has no semantic or legacy element-request dead paths", () => {
+  const source = fs.readFileSync(
+    path.join(__dirname, "../gateway/static/selector_probe_ui.js"),
+    "utf8",
+  );
+  for (const forbidden of [
+    "accepted_roles",
+    "accepted_names",
+    "prompt_version",
+    "model_id",
+    "element-requests",
+    "wrong_semantics",
+  ]) assert.doesNotMatch(source, new RegExp(forbidden));
+  assert.doesNotMatch(source, /\/elements\/[^`"']+\/(?:probe|validate|migrate)/);
+  assert.doesNotMatch(source, /serializeSemanticContract|sanitizeProbeSuggestion/);
 });
 
 test("init loads status once and establishes visibility-aware polling", async () => {
@@ -117,7 +128,7 @@ test("init loads status once and establishes visibility-aware polling", async ()
       {url: "/api/selector-probe/status", method: "GET"},
     ],
   );
-  assert.equal(ui.state.activeTab, "overview");
+  assert.equal(ui.state.activeTab, "collect");
   assert.equal(ui.state.overview.registry.active_version, "sel-1");
   assert.equal(ui.state.overview.latest_run.status, "completed");
   assert.equal(intervals.length, 1);
@@ -337,13 +348,13 @@ test("refresh restores its triggering focus after loading and final render", asy
   assert.equal(restored.every((value) => value === token), true);
 });
 
-test("seven-tab keyboard navigation wraps and supports activation keys", () => {
-  assert.equal(tabIndexForKey(0, "ArrowRight", 7), 1);
-  assert.equal(tabIndexForKey(0, "ArrowLeft", 7), 6);
-  assert.equal(tabIndexForKey(3, "Home", 7), 0);
-  assert.equal(tabIndexForKey(3, "End", 7), 6);
-  assert.equal(tabIndexForKey(3, "Enter", 7), 3);
-  assert.equal(tabIndexForKey(3, " ", 7), 3);
+test("four-menu keyboard navigation wraps and supports activation keys", () => {
+  assert.equal(tabIndexForKey(0, "ArrowRight", 4), 1);
+  assert.equal(tabIndexForKey(0, "ArrowLeft", 4), 3);
+  assert.equal(tabIndexForKey(2, "Home", 4), 0);
+  assert.equal(tabIndexForKey(2, "End", 4), 3);
+  assert.equal(tabIndexForKey(2, "Enter", 4), 2);
+  assert.equal(tabIndexForKey(2, " ", 4), 2);
 });
 
 test("dialog focus trap wraps in both directions", () => {
@@ -436,6 +447,9 @@ test("console source keeps safe rendering, polite regions, and responsive summar
   const shell = fs.readFileSync(
     path.join(__dirname, "../gateway/app.py"),
     "utf8",
+  ) + fs.readFileSync(
+    path.join(__dirname, "../gateway/templates/_selector_probe_console.html"),
+    "utf8",
   );
   assert.doesNotMatch(uiSource, /\.innerHTML\s*=/);
   assert.match(css, /\.selector-summary-grid\s*\{[^}]*repeat\(5,/s);
@@ -466,4 +480,24 @@ test("console source keeps safe rendering, polite regions, and responsive summar
     const tag = shell.match(new RegExp(`<[^>]+id="${id}"[^>]*>`))?.[0] || "";
     assert.match(tag, /aria-live="polite"/);
   }
+});
+
+test("dashboard includes one four-menu partial and no legacy top-level tabs", () => {
+  const appSource = fs.readFileSync(
+    path.join(__dirname, "../gateway/app.py"),
+    "utf8",
+  );
+  const partial = fs.readFileSync(
+    path.join(__dirname, "../gateway/templates/_selector_probe_console.html"),
+    "utf8",
+  );
+  assert.match(appSource, /include '_selector_probe_console\.html'/);
+  assert.equal((partial.match(/data-selector-probe-tab=/g) || []).length, 4);
+  for (const id of ["collect", "managed", "operations", "settings"]) {
+    assert.match(partial, new RegExp(`data-selector-probe-tab="${id}"`));
+  }
+  assert.doesNotMatch(
+    appSource + partial,
+    /selector-probe-tab-(overview|elements|gates|runs|versions|alerts)/,
+  );
 });

@@ -45,10 +45,15 @@ class AdsPowerController:
     def _request(
         self,
         endpoint: str,
-        profile_id: str,
+        profile_id: str | None = None,
         params: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        request_params = {"user_id": profile_id, **(params or {})}
+    ) -> dict[str, Any] | list[Any]:
+        request_params = dict(params or {})
+        if profile_id is not None:
+            normalized_profile_id = str(profile_id).strip()
+            if not normalized_profile_id:
+                raise ValueError("profile_id cannot be empty")
+            request_params["user_id"] = normalized_profile_id
         response = requests.get(
             f"{self.base_url}{endpoint}",
             params=request_params,
@@ -64,16 +69,16 @@ class AdsPowerController:
             message = payload.get("msg") or payload.get("message") or code
             raise AdsPowerError(f"AdsPower API 错误：{message}")
         data = payload.get("data", payload)
-        if not isinstance(data, dict):
+        if not isinstance(data, (dict, list)):
             raise AdsPowerError("AdsPower 返回的 data 字段格式错误")
         return data
 
     def _request_with_retry(
         self,
         endpoint: str,
-        profile_id: str,
+        profile_id: str | None = None,
         params: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
+    ) -> dict[str, Any] | list[Any]:
         last_error: Exception | None = None
         for attempt in range(1, self.max_retries + 1):
             try:
@@ -98,6 +103,8 @@ class AdsPowerController:
             profile_id,
             {"open_tabs": 1, "ip_tab": 0},
         )
+        if not isinstance(data, dict):
+            raise AdsPowerError("AdsPower browser start response is invalid")
         ws = data.get("ws") or {}
         puppeteer_url = ws.get("puppeteer") if isinstance(ws, dict) else None
         if not puppeteer_url:
@@ -110,7 +117,10 @@ class AdsPowerController:
         profile_id = str(profile_id or "").strip()
         if not profile_id:
             raise ValueError("profile_id 不能为空")
-        return self._request_with_retry("/api/v1/browser/stop", profile_id)
+        data = self._request_with_retry("/api/v1/browser/stop", profile_id)
+        if not isinstance(data, dict):
+            raise AdsPowerError("AdsPower browser stop response is invalid")
+        return data
 
     def get_browser_active(self, profile_id: str) -> dict[str, Any]:
         """查询指定窗口当前是否仍处于活动状态。"""
@@ -118,7 +128,104 @@ class AdsPowerController:
         profile_id = str(profile_id or "").strip()
         if not profile_id:
             raise ValueError("profile_id 不能为空")
-        return self._request_with_retry("/api/v1/browser/active", profile_id)
+        data = self._request_with_retry("/api/v1/browser/active", profile_id)
+        if not isinstance(data, dict):
+            raise AdsPowerError("AdsPower active response is invalid")
+        return data
+
+    def list_profiles(self, *, page: int = 1, page_size: int = 200) -> list[dict[str, Any]]:
+        """Return a small internal profile list without passing an empty user_id."""
+
+        profiles, _raw_count, _total = self._list_profile_page(
+            page=page,
+            page_size=page_size,
+        )
+        return profiles
+
+    def _list_profile_page(
+        self, *, page: int, page_size: int
+    ) -> tuple[list[dict[str, Any]], int, int | None]:
+        if isinstance(page, bool) or not isinstance(page, int) or page < 1:
+            raise ValueError("page must be a positive integer")
+        if isinstance(page_size, bool) or not isinstance(page_size, int) or not 1 <= page_size <= 200:
+            raise ValueError("page_size must be an integer between 1 and 200")
+        data = self._request_with_retry(
+            "/api/v1/user/list", None, {"page": page, "page_size": page_size}
+        )
+        raw_rows = data if isinstance(data, list) else data.get("list", [])
+        if not isinstance(raw_rows, list):
+            raise AdsPowerError("AdsPower profile list is invalid")
+        total = self._profile_list_total(data) if isinstance(data, dict) else None
+        profiles: list[dict[str, Any]] = []
+        for row in raw_rows:
+            if not isinstance(row, dict):
+                continue
+            profile_id = row.get("user_id", row.get("profile_id", row.get("id", "")))
+            if not isinstance(profile_id, str) or not profile_id.strip():
+                continue
+            record: dict[str, Any] = {
+                "id": profile_id.strip(),
+                "name": str(row.get("name", "") or "").strip(),
+                "status": str(row.get("status", "") or "").strip(),
+            }
+            group_name = row.get("group_name")
+            if isinstance(group_name, str) and group_name.strip():
+                record["group_name"] = group_name.strip()
+            profiles.append(record)
+        return profiles, len(raw_rows), total
+
+    @staticmethod
+    def _profile_list_total(data: dict[str, Any]) -> int | None:
+        for key in ("total", "total_num", "total_count"):
+            value = data.get(key)
+            if isinstance(value, bool):
+                continue
+            if isinstance(value, int) and value >= 0:
+                return value
+            if isinstance(value, str) and value.isdecimal():
+                return int(value)
+        return None
+
+    def list_all_profiles(
+        self, *, page_size: int = 200, max_profiles: int = 1000
+    ) -> list[dict[str, Any]]:
+        if (
+            isinstance(page_size, bool)
+            or not isinstance(page_size, int)
+            or not 1 <= page_size <= 200
+        ):
+            raise ValueError("page_size must be an integer between 1 and 200")
+        if (
+            isinstance(max_profiles, bool)
+            or not isinstance(max_profiles, int)
+            or not 1 <= max_profiles <= 5000
+        ):
+            raise ValueError("max_profiles must be between 1 and 5000")
+        profiles: list[dict[str, Any]] = []
+        profile_ids: set[str] = set()
+        page = 1
+        max_pages = (5000 + page_size - 1) // page_size + 1
+        while len(profiles) < max_profiles:
+            rows, raw_count, total = self._list_profile_page(
+                page=page,
+                page_size=page_size,
+            )
+            for row in rows:
+                profile_id = row["id"]
+                if profile_id in profile_ids:
+                    continue
+                profiles.append(row)
+                profile_ids.add(profile_id)
+                if len(profiles) == max_profiles:
+                    break
+            if total is not None and page * page_size >= total:
+                break
+            if total is None and raw_count < page_size:
+                break
+            if page == max_pages:
+                raise AdsPowerError("AdsPower profile pagination limit exceeded")
+            page += 1
+        return profiles
 
 
 __all__ = ["AdsPowerController", "AdsPowerError"]

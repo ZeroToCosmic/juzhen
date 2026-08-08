@@ -14,7 +14,8 @@ from gateway.settings_store import load_settings, save_settings
 def test_selector_probe_defaults_and_secret_round_trip(tmp_path):
     path = tmp_path / "config.json"
     settings = load_settings(path)
-    assert settings["selector_probe"]["daily_time"] == "03:00"
+    assert settings["selector_probe"]["schedule_time"] == "03:00"
+    assert settings["selector_probe"]["page_timeout_seconds"] == 90
     assert settings["selector_probe"]["timezone"] == "Asia/Shanghai"
     settings["selector_probe"]["webhook"]["signing_secret"] = "secret"
     save_settings(settings, path)

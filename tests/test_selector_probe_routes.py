@@ -1,25 +1,25 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, time
-import hashlib
 import json
 from types import SimpleNamespace
 
 from flask import Flask
+import pytest
 from werkzeug.security import generate_password_hash
 
 from gateway.app import create_app
+from gateway.auth_blueprint import install_management_guard
 from gateway.auth_store import AuthStore
 from gateway.management_db import open_management_db
 from selector_probe.catalog import ElementCatalog
-from selector_probe import worker as selector_worker
 from selector_probe.blueprint import (
+    _profile_ref,
     create_selector_probe_blueprint,
     default_gate_service_factory,
 )
+from selector_probe.picker import PickerError
 from selector_probe.store import SelectorProbeStore
-from selector_probe.probe import run_healing_probe
-from selector_probe.store import _validated_bundle, _validated_evidence
 
 
 ACTIVE_BUNDLE = {
@@ -70,8 +70,6 @@ class FakeStore:
                 "status": "published",
                 "base_version_id": "sel-0",
                 "bundle_hash": "sha256:" + "a" * 64,
-                "model_id": "gpt-main",
-                "prompt_version": "selector-repair-v1",
                 "created_at": "2026-07-29T03:00:30+08:00",
                 "validated_at": "2026-07-29T03:00:40+08:00",
                 "published_at": "2026-07-29T03:00:50+08:00",
@@ -79,7 +77,7 @@ class FakeStore:
                 "evidence": {
                     "profile_id": "profile-a",
                     "raw_snapshot": {"nodes": []},
-                    "model_api_key": "secret",
+                    "private_token": "secret",
                 },
             }
         ]
@@ -267,18 +265,258 @@ def make_client(*, store=None, registry=None, dispatcher=None, gate_service=None
     return app.test_client(), selected_store
 
 
+class FakePickerRouteService:
+    def __init__(self, *, owner_user_id=7, failure=None):
+        self.owner_user_id = owner_user_id
+        self.failure = failure
+        self.calls = []
+
+    def _check(self, actor_user_id):
+        if self.failure is not None:
+            raise self.failure
+        if actor_user_id != self.owner_user_id:
+            raise PickerError("picker_not_found", 404)
+
+    def start(self, **kwargs):
+        self._check(kwargs["actor_user_id"])
+        self.calls.append(("start", kwargs))
+        return {"session_id": "picker-1", "status": "starting", "revision": 1}
+
+    def get(self, session_id, **kwargs):
+        self._check(kwargs["actor_user_id"])
+        self.calls.append(("get", session_id, kwargs))
+        return {"session_id": session_id, "status": "ready", "revision": 2}
+
+    def confirm(self, session_id, **kwargs):
+        self._check(kwargs["actor_user_id"])
+        if kwargs["expected_revision"] != 2:
+            raise PickerError("stale_picker_revision", 409)
+        self.calls.append(("confirm", session_id, kwargs))
+        return {"session_id": session_id, "status": "confirmed", "revision": 3}
+
+    def cancel(self, session_id, **kwargs):
+        self._check(kwargs["actor_user_id"])
+        if kwargs["expected_revision"] != 2:
+            raise PickerError("stale_picker_revision", 409)
+        self.calls.append(("cancel", session_id, kwargs))
+        return {"session_id": session_id, "status": "cancelled", "revision": 3}
+
+
+def _picker_route_client(*, role="administrator", actor_user_id=7, service=None):
+    selected_service = service or FakePickerRouteService(
+        owner_user_id=actor_user_id
+    )
+    user = SimpleNamespace(
+        id=actor_user_id,
+        username=role,
+        role=role,
+        must_change_password=False,
+    )
+
+    class AuthService:
+        def validate_session(self, _session, _now):
+            return user
+
+    settings = {
+        "selector_probe": {
+            "test_profile_ids": ["profile-secret"],
+            "dedicated_test_profile_ids": ["profile-secret"],
+        }
+    }
+    app = Flask(__name__)
+    app.secret_key = "picker-route-test"
+    app.register_blueprint(
+        create_selector_probe_blueprint(
+            picker_service_factory=lambda: selected_service,
+            settings_provider=lambda: settings,
+        )
+    )
+    install_management_guard(app, lambda: AuthService())
+    with app.app_context():
+        profile_ref = _profile_ref("profile-secret")
+    client = app.test_client()
+    with client.session_transaction() as session:
+        session["csrf_token"] = "picker-csrf"
+    return client, "picker-csrf", profile_ref, selected_service
+
+
+def test_picker_routes_accept_named_selections_without_trimming_names():
+    client, csrf, profile_ref, service = _picker_route_client()
+
+    started = client.post(
+        "/api/selector-probe/picker/start",
+        json={"profile_ref": profile_ref, "page_state": "feed_ready"},
+        headers={"X-CSRF-Token": csrf},
+    )
+    status = client.get("/api/selector-probe/picker/picker-1")
+    confirmed = client.post(
+        "/api/selector-probe/picker/picker-1/confirm",
+        json={
+            "expected_revision": 2,
+            "selections": [
+                {
+                    "selection_id": "selection-1",
+                    "display_name": "  评论入口  ",
+                }
+            ],
+        },
+        headers={"X-CSRF-Token": csrf},
+    )
+    cancelled = client.post(
+        "/api/selector-probe/picker/picker-1/cancel",
+        json={"expected_revision": 2},
+        headers={"X-CSRF-Token": csrf},
+    )
+
+    assert [started.status_code, status.status_code] == [202, 200]
+    assert [confirmed.status_code, cancelled.status_code] == [200, 200]
+    assert service.calls[0][1]["profile_id"] == "profile-secret"
+    confirm_call = next(item for item in service.calls if item[0] == "confirm")
+    assert confirm_call[2]["selections"] == [
+        {"selection_id": "selection-1", "display_name": "  评论入口  "}
+    ]
+    assert "profile-secret" not in started.get_data(as_text=True)
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected_code"),
+    [
+        (
+            {
+                "expected_revision": 2,
+                "selections": [
+                    {
+                        "selection_id": "selection-1",
+                        "display_name": "评论入口",
+                        "unknown": True,
+                    }
+                ],
+            },
+            "invalid_request",
+        ),
+        (
+            {
+                "expected_revision": 2,
+                "selections": [],
+                "unknown": True,
+            },
+            "invalid_request",
+        ),
+        (
+            {"expected_revision": True, "selections": []},
+            "invalid_expected_revision",
+        ),
+    ],
+)
+def test_picker_confirm_rejects_unknown_keys_and_invalid_revision(
+    payload, expected_code
+):
+    client, csrf, _profile_ref_value, service = _picker_route_client()
+
+    response = client.post(
+        "/api/selector-probe/picker/picker-1/confirm",
+        json=payload,
+        headers={"X-CSRF-Token": csrf},
+    )
+
+    assert response.status_code == 400
+    assert response.get_json() == {"code": expected_code}
+    assert service.calls == []
+
+
+def test_picker_routes_are_administrator_only():
+    client, csrf, profile_ref, service = _picker_route_client(role="operator")
+    requests = (
+        client.post(
+            "/api/selector-probe/picker/start",
+            json={"profile_ref": profile_ref, "page_state": "feed_ready"},
+            headers={"X-CSRF-Token": csrf},
+        ),
+        client.get("/api/selector-probe/picker/picker-1"),
+        client.post(
+            "/api/selector-probe/picker/picker-1/confirm",
+            json={"expected_revision": 2, "selections": []},
+            headers={"X-CSRF-Token": csrf},
+        ),
+        client.post(
+            "/api/selector-probe/picker/picker-1/cancel",
+            json={"expected_revision": 2},
+            headers={"X-CSRF-Token": csrf},
+        ),
+    )
+
+    assert [response.status_code for response in requests] == [403] * 4
+    assert all(response.get_json() == {"code": "forbidden"} for response in requests)
+    assert service.calls == []
+
+
+def test_picker_routes_hide_another_owners_session_and_report_stale_revision():
+    service = FakePickerRouteService(owner_user_id=7)
+    other, csrf, _profile_ref_value, _service = _picker_route_client(
+        actor_user_id=8,
+        service=service,
+    )
+    wrong_owner = (
+        other.get("/api/selector-probe/picker/picker-1"),
+        other.post(
+            "/api/selector-probe/picker/picker-1/confirm",
+            json={"expected_revision": 2, "selections": []},
+            headers={"X-CSRF-Token": csrf},
+        ),
+        other.post(
+            "/api/selector-probe/picker/picker-1/cancel",
+            json={"expected_revision": 2},
+            headers={"X-CSRF-Token": csrf},
+        ),
+    )
+    assert [response.status_code for response in wrong_owner] == [404] * 3
+
+    owner, owner_csrf, _profile_ref_value, _service = _picker_route_client(
+        service=service
+    )
+    stale_confirm = owner.post(
+        "/api/selector-probe/picker/picker-1/confirm",
+        json={"expected_revision": 1, "selections": []},
+        headers={"X-CSRF-Token": owner_csrf},
+    )
+    stale_cancel = owner.post(
+        "/api/selector-probe/picker/picker-1/cancel",
+        json={"expected_revision": 1},
+        headers={"X-CSRF-Token": owner_csrf},
+    )
+    assert [stale_confirm.status_code, stale_cancel.status_code] == [409, 409]
+    assert stale_confirm.get_json() == {"code": "stale_picker_revision"}
+
+
+def test_picker_route_sanitizes_unknown_service_failure():
+    service = FakePickerRouteService(failure=RuntimeError("cdp secret"))
+    client, _csrf, _profile_ref_value, _service = _picker_route_client(
+        service=service
+    )
+
+    response = client.get("/api/selector-probe/picker/picker-1")
+
+    assert response.status_code == 503
+    assert response.get_json() == {"code": "picker_unavailable"}
+    assert "secret" not in response.get_data(as_text=True)
+
+
 def _element_payload(**changes):
     payload = {
         "display_name": "Share entry",
-        "intent": "find the share entry for the active video",
-        "required_state": "feed_ready",
-        "scope": "active_video",
-        "probe_action": "inspect_only",
-        "accepted_roles": ["button"],
-        "accepted_names": ["Share"],
-        "name_mode": "exact",
-        "preferred_attributes": ["data-e2e", "aria-label"],
-        "postcondition": "",
+        "page_key": "tiktok.feed",
+        "target_origin": "https://www.tiktok.com",
+        "url_pattern": "https://www.tiktok.com/*",
+        "operation_steps": [],
+        "fingerprint": {
+            "tag": "button",
+            "role": "button",
+            "name": "Share",
+        },
+        "locators": [
+            {"type": "css", "value": '[data-e2e="share-icon"]'},
+            {"type": "xpath", "value": '//*[@aria-label="Share"]'},
+        ],
     }
     payload.update(changes)
     return payload
@@ -288,10 +526,7 @@ def _authenticated_element_client(
     tmp_path,
     role,
     *,
-    legacy_elements=None,
     registry=None,
-    use_default_dispatcher=False,
-    dispatcher_raises=False,
 ):
     state_dir = tmp_path / f"{role}-management"
     management_path = state_dir / "management.db"
@@ -306,18 +541,6 @@ def _authenticated_element_client(
         )
     finally:
         connection.close()
-    dispatched = []
-
-    def element_dispatcher(request_id):
-        with SelectorProbeStore(selector_path) as store:
-            request = store.get_element_request(request_id)
-        assert request is not None
-        assert request["status"] == "pending"
-        dispatched.append(request)
-        if dispatcher_raises:
-            raise RuntimeError("wake unavailable")
-        return {"status": "accepted"}
-
     config = {
         "TESTING": True,
         "MANAGEMENT_STATE_DIR": state_dir,
@@ -325,17 +548,10 @@ def _authenticated_element_client(
         "SELECTOR_PROBE_STORE_FACTORY": (
             lambda: SelectorProbeStore(selector_path)
         ),
-        "SELECTOR_PROBE_LEGACY_ELEMENTS_PROVIDER": (
-            lambda: legacy_elements or {}
-        ),
         "SELECTOR_PROBE_REGISTRY_FACTORY": (
             lambda: registry or FakeRegistry()
         ),
     }
-    if not use_default_dispatcher:
-        config["SELECTOR_PROBE_ELEMENT_REQUEST_DISPATCHER"] = (
-            element_dispatcher
-        )
     app = create_app(config)
     client = app.test_client()
     assert client.get("/login").status_code == 200
@@ -354,7 +570,7 @@ def _authenticated_element_client(
         client,
         login.get_json()["csrf_token"],
         selector_path,
-        dispatched,
+        [],
     )
 
 
@@ -365,7 +581,7 @@ def test_active_returns_complete_published_bundle_and_drops_hostile_fields():
         "profile_id": "profile-a",
         "raw_snapshot": {"nodes": [{"cdp_url": "ws://secret"}]},
         "webhook": {"signing_secret": "webhook-secret"},
-        "model_api_key": "model-secret",
+        "private_token": "private-secret",
     }
     client, _store = make_client(registry=FakeRegistry(active=hostile))
 
@@ -379,11 +595,10 @@ def test_active_returns_complete_published_bundle_and_drops_hostile_fields():
         "profile-a",
         "ws://secret",
         "webhook-secret",
-        "model-secret",
+        "private-secret",
         "raw_snapshot",
     ):
         assert forbidden not in body
-
 
 def test_active_returns_503_when_registry_empty_or_unavailable():
     empty, _store = make_client(registry=FakeRegistry(active=False))
@@ -414,7 +629,7 @@ def test_history_pagination_defaults_to_50_and_caps_at_200():
     }
     assert "raw_snapshot" not in first.get_data(as_text=True)
     assert "profile-a" not in first.get_data(as_text=True)
-    assert "model_api_key" not in second.get_data(as_text=True)
+    assert "private_token" not in second.get_data(as_text=True)
     assert "bundle" not in second.get_json()["items"][0]
     assert "evidence" not in second.get_json()["items"][0]
 
@@ -508,7 +723,7 @@ def test_run_now_dispatcher_error_is_sanitized_and_releases_lock():
 
     def dispatcher(_request_id, _done):
         calls.append("dispatch")
-        raise RuntimeError("model_api_key=secret")
+        raise RuntimeError("private_token=secret")
 
     client, _store = make_client(dispatcher=dispatcher)
 
@@ -684,21 +899,28 @@ def test_operator_can_read_and_probe_but_cannot_mutate_elements(tmp_path):
         json={"expected_revision": record.revision},
         headers={"X-CSRF-Token": csrf},
     )
-    assert probe.status_code == 202
-    assert dispatched[0]["request_type"] == "probe"
-    for path, method in (
-        (f"/api/selector-probe/elements/{record.id}/draft", "patch"),
-        (f"/api/selector-probe/elements/{record.id}", "delete"),
-        (f"/api/selector-probe/elements/{record.id}/validate", "post"),
-        (f"/api/selector-probe/elements/{record.id}/migrate", "post"),
+    assert probe.status_code == 404
+    assert dispatched == []
+    for path, method, expected_status in (
+        (f"/api/selector-probe/elements/{record.id}", "patch", 403),
+        (f"/api/selector-probe/elements/{record.id}", "delete", 403),
+        (f"/api/selector-probe/elements/{record.id}/validate", "post", 404),
+        (f"/api/selector-probe/elements/{record.id}/migrate", "post", 404),
     ):
         response = getattr(client, method)(
             path,
-            json={"expected_revision": record.revision},
+            json={
+                "operation": "rename",
+                "display_name": "Renamed",
+                "expected_revision": record.revision,
+            } if method == "patch" else {
+                "expected_revision": record.revision
+            },
             headers={"X-CSRF-Token": csrf},
         )
-        assert response.status_code == 403
-        assert response.get_json() == {"code": "forbidden"}
+        assert response.status_code == expected_status
+        if expected_status == 403:
+            assert response.get_json() == {"code": "forbidden"}
 
 
 def test_element_route_accepts_frontend_referenced_yes_no_query(tmp_path):
@@ -764,27 +986,36 @@ def test_administrator_element_flow_enforces_shape_cas_and_validation_audit(
 
     assert created_response.status_code == 201
     assert created["id"].startswith("element-")
-    assert created["contract"]["probe_action"] == "inspect_only"
+    assert created["definition"] == {
+        key: value
+        for key, value in _element_payload().items()
+        if key != "display_name"
+    }
 
     unsafe = client.post(
         "/api/selector-probe/elements",
-        json={**_element_payload(), "xpath": "/html/body/button"},
+        json={
+            "display_name": "Invalid entry",
+            "unexpected": True,
+        },
         headers={"X-CSRF-Token": csrf},
     )
     immutable = client.patch(
-        f"/api/selector-probe/elements/{created['id']}/draft",
+        f"/api/selector-probe/elements/{created['id']}",
         json={
+            "operation": "rename",
             "expected_revision": created["revision"],
             "id": "replacement",
-            "contract": created["contract"],
+            "display_name": "Replacement",
         },
         headers={"X-CSRF-Token": csrf},
     )
     stale = client.patch(
-        f"/api/selector-probe/elements/{created['id']}/draft",
+        f"/api/selector-probe/elements/{created['id']}",
         json={
+            "operation": "rename",
             "expected_revision": created["revision"] + 1,
-            "contract": created["contract"],
+            "display_name": "Replacement",
         },
         headers={"X-CSRF-Token": csrf},
     )
@@ -795,34 +1026,17 @@ def test_administrator_element_flow_enforces_shape_cas_and_validation_audit(
     )
 
     assert unsafe.status_code == 400
+    assert unsafe.get_json() == {"code": "invalid_element_payload"}
     assert immutable.status_code == 400
     assert stale.status_code == 409
     assert stale.get_json() == {"code": "stale_revision"}
-    assert validation.status_code == 202
-    assert dispatched[-1]["request_type"] == "validate"
-    with SelectorProbeStore(selector_path) as store:
-        audit = store.connection.execute(
-            """
-            SELECT actor_username, event_type, target_id
-            FROM selector_management_audit_events
-            ORDER BY id DESC
-            LIMIT 1
-            """
-        ).fetchone()
-        assert tuple(audit) == (
-            "administrator",
-            "element_validation_requested",
-            created["id"],
-        )
+    assert validation.status_code == 404
+    assert dispatched == []
 
 
-def test_element_request_returns_durable_202_when_best_effort_wake_fails(
-    tmp_path,
-):
-    client, csrf, selector_path, dispatched = _authenticated_element_client(
-        tmp_path,
-        "administrator",
-        dispatcher_raises=True,
+def test_administrator_can_rename_and_rebind_manual_element(tmp_path):
+    client, csrf, _selector_path, _dispatched = (
+        _authenticated_element_client(tmp_path, "administrator")
     )
     created = client.post(
         "/api/selector-probe/elements",
@@ -830,114 +1044,69 @@ def test_element_request_returns_durable_202_when_best_effort_wake_fails(
         headers={"X-CSRF-Token": csrf},
     ).get_json()
 
-    response = client.post(
-        f"/api/selector-probe/elements/{created['id']}/validate",
-        json={"expected_revision": created["revision"]},
+    renamed = client.patch(
+        f"/api/selector-probe/elements/{created['id']}",
+        json={
+            "operation": "rename",
+            "display_name": "Share control",
+            "expected_revision": created["revision"],
+        },
+        headers={"X-CSRF-Token": csrf},
+    )
+    rebound_definition = {
+        key: value
+        for key, value in _element_payload(
+            page_key="tiktok.video",
+            url_pattern="https://www.tiktok.com/@user/video/*",
+            locators=[
+                {"type": "css", "value": '[data-e2e="share"]'},
+            ],
+        ).items()
+        if key != "display_name"
+    }
+    rebound = client.patch(
+        f"/api/selector-probe/elements/{created['id']}",
+        json={
+            "operation": "rebind",
+            "definition": rebound_definition,
+            "expected_revision": renamed.get_json()["revision"],
+        },
         headers={"X-CSRF-Token": csrf},
     )
 
-    assert response.status_code == 202
-    assert dispatched[0]["status"] == "pending"
-    with SelectorProbeStore(selector_path) as store:
-        request = store.get_element_request(
-            response.get_json()["request_id"]
-        )
-        assert request["status"] == "pending"
+    assert renamed.status_code == 200
+    assert renamed.get_json()["display_name"] == "Share control"
+    assert rebound.status_code == 200
+    assert rebound.get_json()["definition"] == rebound_definition
+    assert rebound.get_json()["status"] == "draft"
 
 
-def test_element_request_status_route_returns_only_safe_polling_projection(
-    tmp_path,
-):
-    client, csrf, selector_path, _dispatched = _authenticated_element_client(
-        tmp_path,
-        "administrator",
+@pytest.mark.parametrize("query", ["source=automatic", "scope=active_video"])
+def test_removed_catalog_filters_do_not_change_manual_catalog(query, tmp_path):
+    client, csrf, _selector_path, _dispatched = (
+        _authenticated_element_client(tmp_path, "administrator")
     )
     created = client.post(
         "/api/selector-probe/elements",
         json=_element_payload(),
         headers={"X-CSRF-Token": csrf},
     ).get_json()
-    accepted = client.post(
-        f"/api/selector-probe/elements/{created['id']}/validate",
-        json={"expected_revision": created["revision"]},
-        headers={"X-CSRF-Token": csrf},
-    ).get_json()
-    with SelectorProbeStore(selector_path) as store:
-        claimed = store.claim_element_request(claim_token="worker")
-        assert store.complete_element_request(
-            claimed["request_id"],
-            claimed["claim_token"],
-            claimed["claim_generation"],
-            result={
-                "status": "published",
-                "published": True,
-                "reconciled": True,
-                "new_version": "sel-safe",
-                "candidate": {
-                    "elements": {
-                        created["id"]: {
-                            "scope": "active_video",
-                            "locators": [
-                                {
-                                    "id": "safe-primary",
-                                    "type": "attribute",
-                                    "name": "data-e2e",
-                                    "value": "share",
-                                    "enabled": True,
-                                }
-                            ],
-                        }
-                    }
-                },
-                "rounds": [
-                    {
-                        "profile_mask": "***A123",
-                        "round_number": 1,
-                        "status": "passed",
-                        "raw_dom": "secret-dom",
-                    }
-                ],
-                "repairs": [
-                    {
-                        "attempt": 1,
-                        "failure_code": "zero_match",
-                        "new_method": "attribute",
-                        "prompt": "secret-prompt",
-                    }
-                ],
-                "raw_snapshot": {"secret": True},
-            },
-        )
 
-    response = client.get(
-        f"/api/selector-probe/element-requests/{accepted['request_id']}"
-    )
-    payload = response.get_json()
+    response = client.get(f"/api/selector-probe/elements?{query}")
 
     assert response.status_code == 200
-    assert set(payload) == {
-        "request_id",
-        "request_type",
-        "element_id",
-        "status",
-        "attempt_count",
-        "error_code",
-        "result",
-    }
-    assert payload["result"]["candidate"]["locators"][0]["value"] == "share"
-    assert payload["result"]["rounds"][0]["profile_mask"] == "***A123"
-    assert payload["result"]["repairs"][0]["attempt"] == 1
-    body = response.get_data(as_text=True)
-    assert "secret-dom" not in body
-    assert "secret-prompt" not in body
-    assert "raw_snapshot" not in body
+    assert [item["id"] for item in response.get_json()["items"]] == [
+        created["id"]
+    ]
 
 
-def test_create_app_default_element_dispatcher_does_not_return_503(tmp_path):
-    client, csrf, selector_path, _dispatched = _authenticated_element_client(
-        tmp_path,
-        "administrator",
-        use_default_dispatcher=True,
+@pytest.mark.parametrize("operation", ["probe", "validate"])
+def test_removed_single_element_execution_routes_return_not_found(
+    operation,
+    tmp_path,
+):
+    client, csrf, _selector_path, dispatched = (
+        _authenticated_element_client(tmp_path, "administrator")
     )
     created = client.post(
         "/api/selector-probe/elements",
@@ -946,17 +1115,25 @@ def test_create_app_default_element_dispatcher_does_not_return_503(tmp_path):
     ).get_json()
 
     response = client.post(
-        f"/api/selector-probe/elements/{created['id']}/probe",
+        f"/api/selector-probe/elements/{created['id']}/{operation}",
         json={"expected_revision": created["revision"]},
         headers={"X-CSRF-Token": csrf},
     )
 
-    assert response.status_code == 202
-    with SelectorProbeStore(selector_path) as store:
-        assert (
-            store.get_element_request(response.get_json()["request_id"])
-            is not None
-        )
+    assert response.status_code == 404
+    assert dispatched == []
+
+
+def test_removed_element_request_status_route_returns_not_found(tmp_path):
+    client, _csrf, _selector_path, _dispatched = (
+        _authenticated_element_client(tmp_path, "operator")
+    )
+
+    response = client.get(
+        "/api/selector-probe/element-requests/legacy-request"
+    )
+
+    assert response.status_code == 404
 
 
 def test_administrator_cannot_delete_element_with_dependencies(tmp_path):
@@ -992,12 +1169,12 @@ def test_administrator_cannot_delete_element_with_dependencies(tmp_path):
     assert response.get_json() == {"code": "element_has_dependencies"}
 
 
-def test_legacy_migration_keeps_dependency_snapshot_unchanged(tmp_path):
-    legacy_xpath = "/html/body/main/div[2]/button"
+def test_removed_migration_route_does_not_mutate_dependencies(
+    tmp_path,
+):
     client, csrf, selector_path, _dispatched = _authenticated_element_client(
         tmp_path,
         "administrator",
-        legacy_elements={"legacy-share": legacy_xpath},
     )
     with SelectorProbeStore(selector_path) as store:
         store.replace_strategy_dependencies(
@@ -1015,27 +1192,13 @@ def test_legacy_migration_keeps_dependency_snapshot_unchanged(tmp_path):
             tuple(row)
             for row in store.dependency_rows_for_aliases(["legacy-share"])
         ]
-    listed = client.get("/api/selector-probe/elements")
-    legacy_item = next(
-        item
-        for item in listed.get_json()["items"]
-        if item["id"] == "legacy-share"
-    )
-    assert legacy_item["migration_available"] is True
-    assert legacy_item["management_source"] == "legacy_manual"
-    assert legacy_item["draft_status"] is None
-    assert legacy_item["revision"] == 0
-
     response = client.post(
         "/api/selector-probe/elements/legacy-share/migrate",
         json={"expected_revision": 0},
         headers={"X-CSRF-Token": csrf},
     )
 
-    assert response.status_code == 200
-    assert response.get_json()["management_source"] == "legacy_manual"
-    assert response.get_json()["migration_available"] is False
-    assert response.get_json()["candidates"][0]["value"] == legacy_xpath
+    assert response.status_code == 404
     with SelectorProbeStore(selector_path) as store:
         assert [
             tuple(row)
@@ -1043,451 +1206,46 @@ def test_legacy_migration_keeps_dependency_snapshot_unchanged(tmp_path):
         ] == before
 
 
-def test_element_detail_returns_real_safe_candidate_comparison_and_history(
-    tmp_path,
-):
-    registry = FakeRegistry(active={})
-    client, csrf, selector_path, _dispatched = _authenticated_element_client(
-        tmp_path,
-        "administrator",
-        registry=registry,
+def test_element_detail_exposes_only_manual_v2_definition(tmp_path):
+    client, csrf, _selector_path, _dispatched = (
+        _authenticated_element_client(tmp_path, "administrator")
     )
+    expected = _element_payload()
     created = client.post(
         "/api/selector-probe/elements",
-        json=_element_payload(),
+        json=expected,
         headers={"X-CSRF-Token": csrf},
     ).get_json()
-    element_id = created["id"]
-    active_definition = {
-        "scope": "active_video",
-        "locators": [
-            {
-                "id": "active-role",
-                "type": "role",
-                "role": "button",
-                "name": "Share",
-                "name_mode": "exact",
-                "enabled": True,
-            }
-        ],
-    }
-    registry.active = {
-        "version": "sel-detail",
-        "bundle_hash": "sha256:" + "a" * 64,
-        "elements": {element_id: active_definition},
-    }
-    repaired = {
-        "id": "repaired-attribute",
-        "type": "attribute",
-        "name": "data-e2e",
-        "value": "share-icon",
-        "enabled": True,
-    }
-    with SelectorProbeStore(selector_path) as store:
-        with store.connection:
-            store.connection.execute(
-                """
-                UPDATE element_drafts
-                SET candidates_json = ?, validation_json = ?
-                WHERE element_id = ?
-                """,
-                (
-                    json.dumps([repaired]),
-                    json.dumps(
-                        {
-                            "status": "passed",
-                            "repairs": [
-                                {
-                                    "attempt": index,
-                                    "failure_code": "zero_match",
-                                    "new_method": "attribute",
-                                    "result": "passed",
-                                    "prompt": "secret prompt",
-                                }
-                                for index in range(1, 5)
-                            ],
-                            "raw_dom": "secret dom",
-                        }
-                    ),
-                    element_id,
-                ),
-            )
-            store.connection.execute(
-                """
-                INSERT INTO selector_versions (
-                    id, site, environment, status, base_version_id,
-                    bundle_json, bundle_hash, evidence_json, model_id,
-                    prompt_version, created_at, validated_at, published_at
-                ) VALUES (?, 'tiktok', 'production', 'published', '',
-                          ?, ?, ?, 'model-safe', 'prompt-safe',
-                          ?, ?, ?)
-                """,
-                (
-                    "sel-detail",
-                    json.dumps(
-                        {
-                            "elements": {element_id: active_definition},
-                            "raw_dom": "secret version dom",
-                        }
-                    ),
-                    "sha256:" + "a" * 64,
-                    json.dumps({"raw_dom": "secret evidence"}),
-                    "2026-07-29T03:00:00+00:00",
-                    "2026-07-29T03:00:01+00:00",
-                    "2026-07-29T03:00:02+00:00",
-                ),
-            )
 
-    response = client.get(f"/api/selector-probe/elements/{element_id}")
+    response = client.get(
+        f"/api/selector-probe/elements/{created['id']}"
+    )
 
     assert response.status_code == 200
     payload = response.get_json()
-    assert payload["candidate_comparison"] == {
-        "active": [active_definition["locators"][0]],
-        "deterministic": [],
-        "repaired": [repaired],
+    assert payload["definition"] == {
+        key: value for key, value in expected.items() if key != "display_name"
     }
-    assert payload["deterministic_candidates"] == []
-    assert payload["repaired_candidates"] == [repaired]
-    assert len(payload["repairs"]) == 3
-    assert payload["history"] == [
-        {
-            "version_id": "sel-detail",
-            "status": "published",
-            "base_version_id": "",
-            "bundle_hash": "sha256:" + "a" * 64,
-            "created_at": "2026-07-29T03:00:00+00:00",
-            "validated_at": "2026-07-29T03:00:01+00:00",
-            "published_at": "2026-07-29T03:00:02+00:00",
-        }
-    ]
+    assert set(payload) == {
+        "id",
+        "display_name",
+        "status",
+        "page_key",
+        "primary_locator_type",
+        "dependency_count",
+        "last_validated_at",
+        "revision",
+        "definition",
+        "dependencies",
+        "validation",
+        "history",
+        "alerts",
+        "strategy_controls",
+    }
     body = response.get_data(as_text=True)
     for forbidden in (
-        "secret prompt",
-        "secret dom",
-        "secret version dom",
-        "secret evidence",
+        "contract",
+        "raw_dom",
+        "profile_id",
     ):
         assert forbidden not in body
-
-
-def test_pending_and_processing_element_request_lock_mutations_until_terminal(
-    tmp_path,
-):
-    client, csrf, selector_path, _dispatched = _authenticated_element_client(
-        tmp_path,
-        "administrator",
-    )
-    created = client.post(
-        "/api/selector-probe/elements",
-        json=_element_payload(),
-        headers={"X-CSRF-Token": csrf},
-    ).get_json()
-    element_id = created["id"]
-    original_contract = created["contract"]
-    accepted = client.post(
-        f"/api/selector-probe/elements/{element_id}/validate",
-        json={"expected_revision": created["revision"]},
-        headers={"X-CSRF-Token": csrf},
-    )
-    request_revision = accepted.get_json()["expected_revision"]
-    changed_contract = {
-        **original_contract,
-        "intent": "must wait until request completes",
-    }
-
-    pending_responses = (
-        client.patch(
-            f"/api/selector-probe/elements/{element_id}/draft",
-            json={
-                "expected_revision": request_revision,
-                "contract": changed_contract,
-            },
-            headers={"X-CSRF-Token": csrf},
-        ),
-        client.delete(
-            f"/api/selector-probe/elements/{element_id}",
-            json={"expected_revision": request_revision},
-            headers={"X-CSRF-Token": csrf},
-        ),
-        client.post(
-            f"/api/selector-probe/elements/{element_id}/probe",
-            json={"expected_revision": request_revision},
-            headers={"X-CSRF-Token": csrf},
-        ),
-    )
-    assert all(response.status_code == 409 for response in pending_responses)
-    assert all(
-        response.get_json() == {"code": "element_request_in_progress"}
-        for response in pending_responses
-    )
-    with SelectorProbeStore(selector_path) as store:
-        pending_element = store.get_managed_element_row(element_id)
-        pending_draft = store.managed_element_draft_row(element_id)
-        claimed = store.claim_element_request(claim_token="worker-lock")
-    assert pending_element["revision"] == request_revision
-    assert json.loads(pending_draft["contract_json"]) == original_contract
-
-    processing_patch = client.patch(
-        f"/api/selector-probe/elements/{element_id}/draft",
-        json={
-            "expected_revision": request_revision,
-            "contract": changed_contract,
-        },
-        headers={"X-CSRF-Token": csrf},
-    )
-    assert processing_patch.status_code == 409
-    assert processing_patch.get_json() == {
-        "code": "element_request_in_progress"
-    }
-
-    with SelectorProbeStore(selector_path) as store:
-        assert store.complete_element_request(
-            claimed["request_id"],
-            claimed["claim_token"],
-            claimed["claim_generation"],
-            result={
-                "status": "published",
-                "published": True,
-                "reconciled": True,
-                "new_version": "sel-lock-complete",
-            },
-        )
-    after_terminal = client.patch(
-        f"/api/selector-probe/elements/{element_id}/draft",
-        json={
-            "expected_revision": request_revision,
-            "contract": changed_contract,
-        },
-        headers={"X-CSRF-Token": csrf},
-    )
-    assert after_terminal.status_code == 200
-    assert after_terminal.get_json()["revision"] == request_revision + 1
-    assert after_terminal.get_json()["contract"]["intent"] == (
-        "must wait until request completes"
-    )
-
-
-def test_repaired_runtime_result_flows_through_worker_store_and_detail(
-    tmp_path,
-):
-    registry = FakeRegistry(active={})
-    client, csrf, selector_path, _dispatched = _authenticated_element_client(
-        tmp_path,
-        "administrator",
-        registry=registry,
-    )
-    created = client.post(
-        "/api/selector-probe/elements",
-        json=_element_payload(),
-        headers={"X-CSRF-Token": csrf},
-    ).get_json()
-    element_id = created["id"]
-    accepted = client.post(
-        f"/api/selector-probe/elements/{element_id}/validate",
-        json={"expected_revision": created["revision"]},
-        headers={"X-CSRF-Token": csrf},
-    )
-    assert accepted.status_code == 202
-
-    deterministic, _deterministic_hash = _validated_bundle(
-        {
-            "elements": {
-                element_id: {
-                    "scope": "active_video",
-                    "locators": [
-                        {
-                            "id": "deterministic-role",
-                            "type": "role",
-                            "role": "button",
-                            "name": "Share",
-                            "name_mode": "exact",
-                            "enabled": True,
-                        }
-                    ],
-                }
-            }
-        }
-    )
-    repaired, _repaired_hash = _validated_bundle(
-        {
-            "elements": {
-                element_id: {
-                    "scope": "active_video",
-                    "locators": [
-                        {
-                            "id": "repaired-attribute",
-                            "type": "attribute",
-                            "name": "data-e2e",
-                            "value": "share-icon",
-                            "enabled": True,
-                        }
-                    ],
-                }
-            }
-        }
-    )
-
-    def evidence(bundle):
-        alias_result = {
-            element_id: {
-                "status": "ok",
-                "candidate_id": (
-                    bundle["elements"][element_id]["locators"][0]["id"]
-                ),
-            }
-        }
-        validations = []
-        for round_number in (1, 2):
-            for profile_number in (1, 2):
-                marker = f"{profile_number}:{round_number}"
-                validations.append(
-                    {
-                        "profile_mask": f"***P{profile_number:03d}",
-                        "round_number": round_number,
-                        "reset_evidence_hash": "sha256:"
-                        + hashlib.sha256(
-                            f"reset:{marker}".encode()
-                        ).hexdigest(),
-                        "snapshot_hash": "sha256:"
-                        + hashlib.sha256(
-                            f"snapshot:{marker}".encode()
-                        ).hexdigest(),
-                        "page_generation": "sha256:"
-                        + hashlib.sha256(
-                            f"generation:{marker}".encode()
-                        ).hexdigest(),
-                            "aliases": json.loads(json.dumps(alias_result)),
-                    }
-                )
-        return {
-            "status": "passed",
-            "bundle_hash": bundle["bundle_hash"],
-            "profiles_passed": 2,
-            "rounds_passed": 2,
-            "validations": validations,
-        }
-
-    class RepairingRuntime:
-        model_call = None
-        config = SimpleNamespace(model_id="model-safe")
-
-        def __init__(self):
-            self.context_number = 0
-
-        def validate_active(self):
-            return {"status": "healthy"}
-
-        def deterministic_candidates(self, **_kwargs):
-            return deterministic
-
-        def deterministic_failure(self):
-            return None
-
-        def validate_candidate(self, candidate):
-            locator_id = (
-                candidate["elements"][element_id]["locators"][0]["id"]
-            )
-            if locator_id == "deterministic-role":
-                return {
-                    "status": "selector_validation_failed",
-                    "failure_class": "selector",
-                    "failed_aliases": [element_id],
-                    "code": "zero_match",
-                    "match_count": 0,
-                }
-            return {"status": "passed"}
-
-        def fresh_validation_context(self, **_kwargs):
-            self.context_number += 1
-            snapshot = {
-                "nodes": [],
-                "capture": self.context_number,
-            }
-            encoded = json.dumps(
-                snapshot,
-                ensure_ascii=False,
-                sort_keys=True,
-                separators=(",", ":"),
-                allow_nan=False,
-            ).encode()
-            return {
-                "snapshot": snapshot,
-                "_snapshot": object(),
-                "snapshot_hash": "sha256:"
-                + hashlib.sha256(encoded).hexdigest(),
-                "page_generation": "sha256:"
-                + hashlib.sha256(
-                    f"page:{self.context_number}".encode()
-                ).hexdigest(),
-            }
-
-        def repair_candidate(self, **_kwargs):
-            return repaired
-
-        def full_validate(self, candidate):
-            return evidence(candidate)
-
-        def store_and_publish(self, _candidate, _evidence):
-            return {
-                "version": "sel-repaired",
-                "published": True,
-                "reconciled": True,
-            }
-
-    _validated_evidence(
-        evidence(repaired),
-        repaired["bundle_hash"],
-        repaired["elements"],
-    )
-    runtime = RepairingRuntime()
-    healing_results = []
-    worker_result = selector_worker.consume_element_requests(
-        store_factory=SelectorProbeStore,
-        executor=lambda _request: (
-            healing_results.append(
-                run_healing_probe(
-                    runtime,
-                    force_requested_candidate=True,
-                    initial_failed_aliases=(element_id,),
-                )
-            )
-            or healing_results[-1]
-        ),
-        db_path=selector_path,
-        clock=SimpleNamespace(
-            now=lambda: datetime(2099, 7, 29, 4, 0, tzinfo=UTC)
-        ),
-    )
-    registry.active = {
-        "version": "sel-repaired",
-        "bundle_hash": repaired["bundle_hash"],
-        "elements": repaired["elements"],
-    }
-
-    assert worker_result["completed"] == 1, (
-        worker_result,
-        healing_results,
-    )
-    response = client.get(f"/api/selector-probe/elements/{element_id}")
-    assert response.status_code == 200
-    detail = response.get_json()
-    assert detail["candidate_comparison"]["deterministic"] == []
-    assert detail["candidate_comparison"]["repaired"] == [
-        repaired["elements"][element_id]["locators"][0]
-    ]
-    assert detail["repairs"] == [
-        {
-            "attempt": 1,
-            "previous_method": "role",
-            "failure_code": "zero_match",
-            "match_count": 0,
-            "new_method": "attribute",
-            "prompt_version": "selector-repair-v1",
-            "model_id": "model-safe",
-            "result": "passed",
-        }
-    ]
-    body = response.get_data(as_text=True)
-    assert "snapshot" not in body
-    assert "nodes" not in body

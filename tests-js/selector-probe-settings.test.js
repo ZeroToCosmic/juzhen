@@ -15,7 +15,6 @@ const {
   renderSettings,
   renderTemporaryPassword,
   sanitizeSettings,
-  settingsFingerprint,
   settingsPermissions,
   settingsStatusText,
   syntheticWebhookPayload,
@@ -80,6 +79,7 @@ function settingsFixture(overrides = {}) {
     schedule_time: "03:00",
     timezone: "Asia/Shanghai",
     target_origin: "https://www.tiktok.com",
+    page_timeout_seconds: 90,
     freshness_hours: 36,
     site: "tiktok",
     environment: "production",
@@ -97,13 +97,6 @@ function settingsFixture(overrides = {}) {
         status: "healthy",
       },
     ],
-    model: {
-      id: "repair-model",
-      provider: "openai",
-      mode: "repair_only",
-      status: "passed",
-      api_key_set: true,
-    },
     redis: {
       status: "healthy",
       namespace: "selector-probe",
@@ -312,25 +305,8 @@ test("settings confirmation renders required reason and visible Chinese errors",
   );
 });
 
-function passedPreflight() {
-  return {
-    status: "passed",
-    base_revision: 4,
-    candidate_fingerprint: settingsFingerprint(settingsFixture()),
-    preflight_token: "preflight-token-4",
-    checked_at: "2026-07-29T03:00:00Z",
-    checks: {
-      profiles: "passed",
-      redis_aof: "passed",
-      redis_eviction: "passed",
-      model: "passed",
-      webhook: "passed",
-    },
-  };
-}
-
-test("operator settings model is read only", () => {
-  const model = settingsPermissions({
+test("operator settings permissions are read only", () => {
+  const permissions = settingsPermissions({
     role: "operator",
     permissions: [
       "probe:read",
@@ -339,34 +315,18 @@ test("operator settings model is read only", () => {
       "webhook:test",
     ],
   });
-  assert.equal(model.canEdit, false);
-  assert.equal(model.canTestWebhook, true);
-  assert.equal(model.canManageAccounts, false);
+  assert.equal(permissions.canEdit, false);
+  assert.equal(permissions.canTestWebhook, true);
+  assert.equal(permissions.canManageAccounts, false);
 });
 
-test("enforce change requires preflight and reason", () => {
+test("enforce change requires a dangerous-change reason", () => {
   const result = validateSettingsSave(
     settingsFixture({rollout_mode: "publish"}),
     settingsFixture({rollout_mode: "enforce"}),
-    {reason: "", preflight: null},
+    {reason: ""},
   );
-  assert.deepEqual(result.errors, ["reason_required", "preflight_required"]);
-  const insufficient = validateSettingsSave(
-    settingsFixture({rollout_mode: "publish"}),
-    settingsFixture({
-      rollout_mode: "enforce",
-      profiles: [
-        {
-          profile_ref: "profile-ref-a",
-          profile_mask: "***3A7F",
-          dedicated_test: true,
-          status: "healthy",
-        },
-      ],
-    }),
-    {reason: "enable enforcement", preflight: passedPreflight()},
-  );
-  assert.deepEqual(insufficient.errors, ["preflight_failed"]);
+  assert.deepEqual(result.errors, ["reason_required"]);
 });
 
 test("dangerous diff is exact and excludes harmless schedule edits", () => {
@@ -397,10 +357,7 @@ test("settings projection masks profiles and never retains raw secrets", () => {
       },
       {profile_mask: "full-secret-profile"},
     ],
-    model: {
-      ...settingsFixture().model,
-      api_key: "sk-secret",
-    },
+    obsolete_engine: {api_key: "sk-secret"},
     redis: {
       ...settingsFixture().redis,
       password: "redis-secret",
@@ -418,16 +375,15 @@ test("settings projection masks profiles and never retains raw secrets", () => {
     encoded,
     /full-secret-profile|sk-secret|redis-secret|hook-secret|private-token/,
   );
-  assert.equal(safe.model.api_key_set, true);
+  assert.equal(Object.hasOwn(safe, "obsolete_engine"), false);
   assert.equal(safe.redis.password_set, true);
   assert.equal(safe.webhook.signing_secret_set, true);
 });
 
-test("settings renderer exposes six safe sections and operator controls stay readonly", () => {
+test("settings renderer exposes canonical safe sections and readonly controls", () => {
   const {document, nodes} = fakeDocument([
     "selector-settings-basic",
     "selector-settings-profiles",
-    "selector-settings-model",
     "selector-settings-redis",
     "selector-settings-webhook",
     "selector-settings-permissions",
@@ -447,14 +403,13 @@ test("settings renderer exposes six safe sections and operator controls stay rea
   const text = [
     "selector-settings-basic",
     "selector-settings-profiles",
-    "selector-settings-model",
     "selector-settings-redis",
     "selector-settings-webhook",
     "selector-settings-permissions",
   ].map((id) => renderedText(nodes.get(id))).join(" ");
   assert.match(text, /03:00/);
   assert.match(text, /\*\*\*3A7F/);
-  assert.match(text, /repair_only/);
+  assert.match(text, /页面等待: 90 秒/);
   assert.match(text, /noeviction/);
   assert.match(text, /https:\/\/hooks\.example\/\*\*\*/);
   assert.equal(nodes.get("selector-settings-save").hidden, true);
@@ -462,7 +417,7 @@ test("settings renderer exposes six safe sections and operator controls stay rea
   assert.equal(nodes.get("selector-settings-webhook-test").hidden, false);
 });
 
-test("enforce save requires passed checks then uses second confirmation and omits blank secrets", async () => {
+test("enforce save uses reason confirmation and omits blank secrets", async () => {
   const requests = [];
   const ui = createSelectorProbeUI({
     requestJson: async (url, method, body) => {
@@ -471,13 +426,6 @@ test("enforce save requires passed checks then uses second confirmation and omit
         return response({role: "administrator", permissions: ["settings:manage"]});
       }
       if (url.endsWith("/status")) return response({});
-      if (method === "POST" && url.endsWith("/settings/preflight")) {
-        return response({
-          ...passedPreflight(),
-          base_revision: body.expected_revision,
-          candidate_fingerprint: body.candidate_fingerprint,
-        });
-      }
       if (method === "PATCH" && url.endsWith("/settings")) {
         return response(settingsFixture({revision: 5, rollout_mode: "enforce"}));
       }
@@ -493,16 +441,6 @@ test("enforce save requires passed checks then uses second confirmation and omit
   const after = settingsFixture({rollout_mode: "enforce"});
   assert.equal(
     ui.confirmSettingsSave(after, "enable enforcement", {
-      model_api_key: "",
-      redis_password: "",
-      webhook_signing_secret: "",
-    }),
-    false,
-  );
-  await ui.requestSettingsPreflight(after);
-  assert.equal(
-    ui.confirmSettingsSave(after, "enable enforcement", {
-      model_api_key: "",
       redis_password: "",
       webhook_signing_secret: "",
     }),
@@ -521,7 +459,7 @@ test("enforce save requires passed checks then uses second confirmation and omit
   assert.equal(ui.state.settings.rollout_mode, "enforce");
 });
 
-test("preflight binding is invalidated by polling while confirmed save keeps frozen CAS", async () => {
+test("settings polling does not change frozen confirmation CAS", async () => {
   const requests = [];
   const original = settingsFixture({revision: 10});
   const candidate = settingsFixture({revision: 10, rollout_mode: "enforce"});
@@ -532,14 +470,6 @@ test("preflight binding is invalidated by polling while confirmed save keeps fro
         return response({role: "administrator", permissions: ["settings:manage"]});
       }
       if (url.endsWith("/status")) return response({});
-      if (method === "POST" && url.endsWith("/settings/preflight")) {
-        return response({
-          ...passedPreflight(),
-          base_revision: body.expected_revision,
-          candidate_fingerprint: body.candidate_fingerprint,
-          preflight_token: "preflight-token-10",
-        });
-      }
       if (method === "GET" && url.endsWith("/settings")) {
         return response(settingsFixture({revision: 11}));
       }
@@ -556,37 +486,30 @@ test("preflight binding is invalidated by polling while confirmed save keeps fro
   });
   await ui.init();
   ui.state.settings = sanitizeSettings(original);
-  assert.equal(await ui.requestSettingsPreflight(candidate), true);
   assert.equal(
     ui.confirmSettingsSave(candidate, "enable enforcement", {}),
     true,
   );
   assert.equal(ui.state.operationWorkspace.baseRevision, 10);
-  assert.equal(
-    ui.state.operationWorkspace.candidateFingerprint,
-    settingsFingerprint(candidate),
-  );
-  assert.equal(ui.state.operationWorkspace.preflightToken, "preflight-token-10");
 
   await ui.activateTab("settings");
   assert.equal(ui.state.settings.revision, 11);
-  assert.equal(ui.state.settingsPreflight, null);
-  assert.equal(
-    ui.state.settingsStatus,
-    "preflight_invalidated_revision_changed",
-  );
+  assert.equal(ui.state.settingsDraftStale, false);
 
   assert.equal(await ui.submitSettingsSave(), false);
   const patch = requests.find(
     (item) => item.method === "PATCH" && item.url.endsWith("/settings"),
   );
   assert.equal(patch.body.expected_revision, 10);
-  assert.equal(patch.body.candidate_fingerprint, settingsFingerprint(candidate));
-  assert.equal(patch.body.preflight_token, "preflight-token-10");
-  assert.equal(patch.body.preflight_checked_at, "2026-07-29T03:00:00Z");
+  assert.deepEqual(Object.keys(patch.body).sort(), [
+    "expected_revision",
+    "idempotency_key",
+    "reason",
+    "settings",
+  ]);
 });
 
-test("ordinary settings draft freezes first-edit revision and blocks stale schedule/model save", async () => {
+test("ordinary settings draft freezes first-edit revision and saves canonical timeout", async () => {
   const requests = [];
   const ui = createSelectorProbeUI({
     requestJson: async (url, method, body) => {
@@ -603,10 +526,7 @@ test("ordinary settings draft freezes first-edit revision and blocks stale sched
         return response(settingsFixture({
           revision: 6,
           schedule_time: body.settings.schedule_time,
-          model: {
-            ...settingsFixture().model,
-            id: body.settings.model.id,
-          },
+          page_timeout_seconds: body.settings.page_timeout_seconds,
         }));
       }
       return response({});
@@ -621,7 +541,7 @@ test("ordinary settings draft freezes first-edit revision and blocks stale sched
   const oldDraft = settingsFixture({
     revision: 4,
     schedule_time: "04:00",
-    model: {...settingsFixture().model, id: "new-model"},
+    page_timeout_seconds: 120,
   });
   assert.equal(ui.stageSettingsDraft(oldDraft), true);
   assert.equal(ui.state.settingsDraftBaseRevision, 4);
@@ -644,7 +564,7 @@ test("ordinary settings draft freezes first-edit revision and blocks stale sched
   const freshDraft = settingsFixture({
     revision: 5,
     schedule_time: "04:00",
-    model: {...settingsFixture().model, id: "new-model"},
+    page_timeout_seconds: 120,
   });
   assert.equal(ui.stageSettingsDraft(freshDraft), true);
   assert.equal(ui.confirmSettingsSave(freshDraft, "", {}), true);
@@ -652,7 +572,7 @@ test("ordinary settings draft freezes first-edit revision and blocks stale sched
   const patch = requests.find((item) => item.method === "PATCH");
   assert.equal(patch.body.expected_revision, 5);
   assert.equal(patch.body.settings.schedule_time, "04:00");
-  assert.equal(patch.body.settings.model.id, "new-model");
+  assert.equal(patch.body.settings.page_timeout_seconds, 120);
 });
 
 test("settings reload clears write-only DOM and pending secret state before new revision save", async () => {
@@ -690,7 +610,6 @@ test("settings reload clears write-only DOM and pending secret state before new 
   ui.stageSettingsDraft(oldDraft);
   assert.equal(
     ui.confirmSettingsSave(oldDraft, "", {
-      model_api_key: "old-model-secret",
       redis_password: "old-redis-secret",
     }),
     true,
@@ -710,7 +629,6 @@ test("settings reload clears write-only DOM and pending secret state before new 
 
 test("clearSettingsFormSecrets clears exact write-only controls without closing dialogs", () => {
   const selectors = [
-    '[name="modelApiKey"]',
     '[name="redisPassword"]',
     '[name="webhookSigningSecret"]',
     '[name="webhookUrl"]',
@@ -739,34 +657,6 @@ test("clearSettingsFormSecrets clears exact write-only controls without closing 
     true,
   );
   assert.equal(closeCalls, 0);
-});
-
-test("preflight rejects a server response that is not bound to the candidate", async () => {
-  const ui = createSelectorProbeUI({
-    requestJson: async (url, method) => {
-      if (url === "/api/auth/session") {
-        return response({role: "administrator", permissions: ["settings:manage"]});
-      }
-      if (url.endsWith("/status")) return response({});
-      if (method === "POST" && url.endsWith("/settings/preflight")) {
-        return response({
-          ...passedPreflight(),
-          base_revision: 999,
-          candidate_fingerprint: "wrong",
-          preflight_token: "",
-        });
-      }
-      return response({});
-    },
-    setInterval: () => 1,
-    clearInterval() {},
-    render() {},
-  });
-  await ui.init();
-  ui.state.settings = sanitizeSettings(settingsFixture());
-  assert.equal(await ui.requestSettingsPreflight(settingsFixture()), false);
-  assert.equal(ui.state.settingsPreflight, null);
-  assert.equal(ui.state.settingsStatus, "settings_preflight_binding_invalid");
 });
 
 test("profile masks are display only and colliding suffixes use opaque refs", async () => {
@@ -835,7 +725,7 @@ test("profile masks are display only and colliding suffixes use opaque refs", as
   assert.doesNotMatch(JSON.stringify(patch.body.settings.profiles), /profile_mask/);
 });
 
-test("destroy clears draft, preflight, confirmation, credential, and sensitive UI", async () => {
+test("destroy clears draft, confirmation, credential, and sensitive UI", async () => {
   let cleanupCalls = 0;
   const ui = createSelectorProbeUI({
     requestJson: async (url, method, body) => {
@@ -843,13 +733,6 @@ test("destroy clears draft, preflight, confirmation, credential, and sensitive U
         return response({role: "administrator", permissions: ["settings:manage"]});
       }
       if (url.endsWith("/status")) return response({});
-      if (method === "POST" && url.endsWith("/settings/preflight")) {
-        return response({
-          ...passedPreflight(),
-          base_revision: body.expected_revision,
-          candidate_fingerprint: body.candidate_fingerprint,
-        });
-      }
       return response({});
     },
     setInterval: () => 1,
@@ -863,9 +746,8 @@ test("destroy clears draft, preflight, confirmation, credential, and sensitive U
   ui.state.settings = sanitizeSettings(settingsFixture());
   const draft = settingsFixture({schedule_time: "04:00"});
   ui.stageSettingsDraft(draft);
-  await ui.requestSettingsPreflight(draft);
   assert.equal(
-    ui.confirmSettingsSave(draft, "", {model_api_key: "write-only-secret"}),
+    ui.confirmSettingsSave(draft, "", {redis_password: "write-only-secret"}),
     true,
   );
   ui.state.temporaryCredential = {
@@ -878,7 +760,6 @@ test("destroy clears draft, preflight, confirmation, credential, and sensitive U
   assert.equal(ui.state.settingsDraft, null);
   assert.equal(ui.state.settingsDraftBaseRevision, null);
   assert.equal(ui.state.settingsDraftStale, false);
-  assert.equal(ui.state.settingsPreflight, null);
   assert.equal(ui.state.operationWorkspace, null);
   assert.equal(ui.state.temporaryCredential, null);
   assert.equal(ui.state.selected, null);

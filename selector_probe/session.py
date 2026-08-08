@@ -19,6 +19,8 @@ _SAFE_STAGE_SUMMARIES = {
     ),
     "cdp_unavailable": "CDP endpoint did not become reachable",
     "cdp_connect_failed": "Playwright could not connect over CDP",
+    "profile_cdp_collision": "Profiles resolved to one CDP browser",
+    "probe_page_duplicate": "Profile already owns a probe Page",
 }
 
 
@@ -135,6 +137,16 @@ def _is_cdp_url(value: object) -> bool:
     parsed = urlsplit(value)
     return parsed.scheme.lower() in {"ws", "wss", "http", "https"} and bool(
         parsed.netloc
+    )
+
+
+def _cdp_identity(value: str) -> tuple[str, str, int | None, str]:
+    parsed = urlsplit(value)
+    return (
+        parsed.scheme.casefold(),
+        (parsed.hostname or "").casefold(),
+        parsed.port,
+        parsed.path.rstrip("/") or "/",
     )
 
 
@@ -279,6 +291,7 @@ class ProbeSessionManager:
         self._progress_sink = progress_sink
         self._sleep_fn = sleep_fn
         self._readiness_attempts = readiness_attempts
+        self._page_profile_ids: set[str] = set()
 
     def _require_running(self) -> None:
         if self._stop_requested():
@@ -384,6 +397,7 @@ class ProbeSessionManager:
                 )
 
         handles: list[ProfileHandle] = []
+        endpoint_identities: set[tuple[str, str, int | None, str]] = set()
         try:
             for profile_id in requested:
                 self._require_running()
@@ -401,6 +415,21 @@ class ProbeSessionManager:
                     )
                     if started_by_probe:
                         handles.append(handle)
+                    endpoint_identity = _cdp_identity(ws_url)
+                    if endpoint_identity in endpoint_identities:
+                        _progress(
+                            self._progress_sink,
+                            stage="profile_binding",
+                            profile_id=profile_id,
+                            status="failed",
+                            attempt=1,
+                            failure_code="profile_cdp_collision",
+                        )
+                        raise ProbeSessionError(
+                            "profile_cdp_collision",
+                            profile_mask,
+                        )
+                    endpoint_identities.add(endpoint_identity)
                     self._require_running()
                     ready = False
                     for attempt in range(
@@ -466,6 +495,11 @@ class ProbeSessionManager:
     ) -> ProbePageHandle:
         if not isinstance(handle, ProfileHandle):
             raise TypeError("handle must be a ProfileHandle")
+        if handle.profile_id in self._page_profile_ids:
+            raise ProbeSessionError(
+                "probe_page_duplicate",
+                handle.profile_mask,
+            )
         try:
             chromium = getattr(playwright, "chromium")
             connect_over_cdp = getattr(chromium, "connect_over_cdp")
@@ -505,6 +539,14 @@ class ProbeSessionManager:
                 "probe_page_open_failed",
                 handle.profile_mask,
             ) from None
+        self._page_profile_ids.add(handle.profile_id)
+        _progress(
+            self._progress_sink,
+            stage="profile_page_binding",
+            profile_id=handle.profile_id,
+            status="passed",
+            attempt=1,
+        )
         return ProbePageHandle(
             profile=handle,
             page=page,

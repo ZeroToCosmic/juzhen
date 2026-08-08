@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:local:architecture:selector-probe-run",
+  "title": "Selector Probe management run request",
+  "type": "object",
+  "properties": {
+    "id": {"type": "string", "minLength": 1},
+    "actor_user_id": {"type": "integer", "minimum": 1},
+    "actor_username": {"type": "string", "minLength": 1},
+    "trigger": {"enum": ["manual", "scheduled", "retry"]},
+    "retry_of_run_id": {"type": "string"},
+    "status": {"enum": ["queued", "running", "completed", "failed", "dispatch_failed"]},
+    "created_at": {"type": "string", "format": "date-time"}
+  },
+  "required": ["id", "actor_user_id", "actor_username", "trigger", "status", "created_at"],
+  "additionalProperties": false
+}

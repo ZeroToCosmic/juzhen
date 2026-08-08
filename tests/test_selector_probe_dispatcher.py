@@ -4,6 +4,7 @@ import threading
 
 from selector_probe.blueprint import (
     RedisRunDispatcher,
+    _dispatch_failure_code,
     default_registry_factory,
 )
 
@@ -134,6 +135,56 @@ def test_dispatcher_exception_still_releases_exact_owner():
     assert redis.eval_calls[-1][3] == "request-a"
 
 
+def test_dispatcher_classifies_untyped_exception_without_leaking_message():
+    redis = SharedRedis()
+    completed = threading.Event()
+    terminal = []
+    diagnostic = []
+
+    def fail_tick(*, force):
+        assert force is True
+        raise RuntimeError("profile-secret api_key=do-not-log")
+
+    dispatcher = RedisRunDispatcher(
+        redis_factory=lambda: redis,
+        tick_runner=fail_tick,
+        environment="production",
+        site="tiktok",
+        ttl_seconds=30,
+        terminal_callback=lambda request_id, **payload: terminal.append(
+            (request_id, payload)
+        ),
+        diagnostic_sink=diagnostic.append,
+    )
+
+    assert dispatcher("request-a", completed.set)["status"] == "accepted"
+    assert completed.wait(0.5)
+    assert terminal[0][1]["failure_code"] == "probe_dispatch_failed"
+    rendered = repr(diagnostic)
+    assert "RuntimeError" in rendered
+    assert "request-a" in rendered
+    assert "profile-secret" not in rendered
+    assert "do-not-log" not in rendered
+
+
+def test_dispatch_failure_code_classifies_known_untyped_dependencies():
+    class OperationalError(RuntimeError):
+        pass
+
+    assert (
+        _dispatch_failure_code(OperationalError("private database path"))
+        == "probe_store_unavailable"
+    )
+    assert (
+        _dispatch_failure_code(ConnectionError("private redis URL"))
+        == "probe_dependency_unavailable"
+    )
+    assert (
+        _dispatch_failure_code(TimeoutError("private timeout target"))
+        == "probe_dispatch_timeout"
+    )
+
+
 def test_dispatcher_heartbeats_owner_until_long_run_completes():
     redis = SharedRedis()
     completed = threading.Event()
@@ -163,7 +214,7 @@ def test_dispatcher_heartbeats_owner_until_long_run_completes():
     assert redis.values == {}
 
 
-def test_default_registry_uses_configured_environment_and_site(monkeypatch):
+def test_default_registry_ignores_retired_environment_and_site_settings(monkeypatch):
     import gateway.settings_store
     import redis
 
@@ -177,8 +228,8 @@ def test_default_registry_uses_configured_environment_and_site(monkeypatch):
                 "site": "tiktok_stage",
                 "environment": "staging",
                 "timezone": "Asia/Shanghai",
-                "daily_time": "03:00",
-                "target_url": "https://www.tiktok.com/",
+                    "schedule_time": "03:00",
+                    "target_origin": "https://www.tiktok.com",
                 "test_profile_ids": [],
                 "model_id": "",
                 "observe_only": False,
@@ -200,7 +251,7 @@ def test_default_registry_uses_configured_environment_and_site(monkeypatch):
     registry = default_registry_factory()
 
     assert registry.redis is client
-    assert registry.keys.prefix == "selector_registry:staging:tiktok_stage"
+    assert registry.keys.prefix == "selector_registry:production:tiktok"
 
 
 def test_failed_heartbeat_cancels_run_before_lock_can_expire():

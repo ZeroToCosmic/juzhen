@@ -1,59 +1,65 @@
-"""Paginated selector element catalog backed by durable projections."""
+"""Managed catalog for manually selected browser elements."""
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 import json
+import math
+import re
 import secrets
+from urllib.parse import urlsplit
 
-from browser_element_schema import (
-    ELEMENT_SCOPES,
-    normalize_element_definitions,
-)
-from selector_probe.contracts import normalize_contracts
+from selector_probe.inventory import normalize_recorded_step
 
 from .view_models import ElementRecord
 
 
 ALLOWED_PAGE_SIZES = frozenset({20, 50, 100})
 MAX_SQLITE_INTEGER = (1 << 63) - 1
-ALLOWED_STATUSES = frozenset(
+ELEMENT_STATUSES = frozenset(
     {
-        "all",
-        "healthy",
-        "using_lkg",
+        "pending_rebind",
         "draft",
-        "failed",
-        "probe_unavailable",
+        "validating",
+        "healthy",
+        "degraded",
+        "invalid",
         "disabled",
     }
 )
-ALLOWED_SOURCES = frozenset(
-    {"all", "automatic", "legacy_manual", "disabled"}
-)
+ALLOWED_STATUSES = frozenset({"all", *ELEMENT_STATUSES})
 ALLOWED_REFERENCED = frozenset({"all", "yes", "no"})
 CREATE_FIELDS = frozenset(
     {
         "display_name",
-        "intent",
-        "required_state",
-        "scope",
-        "probe_action",
-        "accepted_roles",
-        "accepted_names",
-        "name_mode",
-        "preferred_attributes",
-        "postcondition",
+        "page_key",
+        "target_origin",
+        "url_pattern",
+        "operation_steps",
+        "fingerprint",
+        "locators",
     }
 )
-_CREATE_REQUIRED_FIELDS = frozenset(
+DEFINITION_FIELDS = CREATE_FIELDS - {"display_name"}
+MAX_OPERATION_STEPS = 20
+MAX_LOCATORS = 6
+MAX_DEFINITION_JSON_BYTES = 64 * 1024
+MAX_FINGERPRINT_JSON_BYTES = 16 * 1024
+MAX_URL_PATTERN_LENGTH = 2000
+
+_DEFAULT_TARGET_ORIGINS = frozenset({"https://www.tiktok.com"})
+_PAGE_KEY_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,119}\Z")
+_STEP_FIELDS = frozenset(
     {
-        "display_name",
-        "intent",
-        "required_state",
-        "scope",
-        "probe_action",
+        "sequence",
+        "locator",
+        "url_before",
+        "url_after",
+        "recorded_at",
+        "frame_key",
+        "shadow",
+        "shadow_key",
     }
 )
 
@@ -64,8 +70,6 @@ class ElementQuery:
     page_size: int = 20
     search: str = ""
     status: str = "all"
-    source: str = "all"
-    scope: str = "all"
     referenced: str = "all"
 
 
@@ -83,103 +87,57 @@ class ElementCatalog:
         self,
         store: object,
         *,
-        legacy_elements_provider: Callable[[], object] | None = None,
         element_id_factory: Callable[[], str] | None = None,
+        allowed_target_origins: object = None,
         site: str = "tiktok",
         environment: str = "production",
     ):
         self.store = store
-        self.legacy_elements_provider = legacy_elements_provider
         self.element_id_factory = element_id_factory or (
             lambda: "element-" + secrets.token_hex(8)
+        )
+        self.allowed_target_origins = _allowed_origins(
+            allowed_target_origins
         )
         self.site = str(site)
         self.environment = str(environment)
 
     def list(self, query: ElementQuery) -> PageResult:
         selected = _validated_query(query)
-        legacy = self._legacy_records(selected)
-        if legacy:
-            requested = min(
-                selected.page * selected.page_size,
-                MAX_SQLITE_INTEGER,
-            )
-            rows, managed_total, revision = (
-                self.store.list_managed_element_rows(
-                    page=1,
-                    page_size=requested,
-                    search=selected.search,
-                    status=selected.status,
-                    source=selected.source,
-                    scope=selected.scope,
-                    referenced=selected.referenced,
-                )
-            )
-            records = [
-                *(_element_record(row) for row in rows),
-                *legacy,
-            ]
-            records.sort(key=_element_priority)
-            offset = (selected.page - 1) * selected.page_size
-            return PageResult(
-                items=tuple(records[offset : offset + selected.page_size]),
-                page=selected.page,
-                page_size=selected.page_size,
-                total=managed_total + len(legacy),
-                revision=revision,
-            )
         rows, total, revision = self.store.list_managed_element_rows(
             page=selected.page,
             page_size=selected.page_size,
             search=selected.search,
             status=selected.status,
-            source=selected.source,
-            scope=selected.scope,
             referenced=selected.referenced,
         )
         return PageResult(
             items=tuple(_element_record(row) for row in rows),
             page=selected.page,
             page_size=selected.page_size,
-            total=total,
-            revision=revision,
+            total=int(total),
+            revision=int(revision),
         )
 
     def get(self, element_id: str) -> ElementRecord | None:
-        selected_id = _element_id(element_id)
-        row = self.store.get_managed_element_row(selected_id)
-        if row is not None:
-            return _element_record(row)
-        return next(
-            (
-                record
-                for record in self._legacy_records(ElementQuery())
-                if record.id == selected_id
-            ),
-            None,
-        )
+        row = self.store.get_managed_element_row(_element_id(element_id))
+        return _element_record(row) if row is not None else None
 
     def draft(self, element_id: str) -> dict[str, object] | None:
-        selected_id = _element_id(element_id)
-        row = self.store.managed_element_draft_row(selected_id)
-        if row is None:
+        loader = getattr(self.store, "manual_element_definition", None)
+        if not callable(loader):
+            raise RuntimeError("manual element definition store is unavailable")
+        definition = loader(_element_id(element_id))
+        if definition is None:
             return None
-        return {
-            "contract": _decoded_json_object(
-                row["contract_json"],
-                "element draft contract",
-            ),
-            "candidates": _decoded_json_array(
-                row["candidates_json"],
-                "element draft candidates",
-            ),
-            "validation": _decoded_json_object(
-                row["validation_json"],
-                "element draft validation",
-            ),
-            "base_version_id": str(row["base_version_id"]),
-            "revision": int(row["revision"]),
-        }
+        if not isinstance(definition, Mapping):
+            raise RuntimeError("manual element definition is corrupt")
+        return _bounded_json_object(
+            definition,
+            "manual element definition",
+            MAX_DEFINITION_JSON_BYTES,
+            error_type=RuntimeError,
+        )
 
     def dependencies(
         self,
@@ -215,76 +173,6 @@ class ElementCatalog:
             )
         )
 
-    def _legacy_records(
-        self,
-        query: ElementQuery,
-    ) -> tuple[ElementRecord, ...]:
-        if not callable(self.legacy_elements_provider):
-            return ()
-        raw = self.legacy_elements_provider()
-        if not isinstance(raw, Mapping):
-            return ()
-        managed_ids_loader = getattr(self.store, "managed_element_ids", None)
-        managed_ids = (
-            set(managed_ids_loader())
-            if callable(managed_ids_loader)
-            else set()
-        )
-        aliases = [
-            alias
-            for alias in raw
-            if isinstance(alias, str)
-            and _valid_element_id(alias)
-            and alias not in managed_ids
-        ]
-        dependencies = self.store.dependency_rows_for_aliases(aliases)
-        dependency_map: dict[str, set[str]] = {}
-        searchable_dependencies: dict[str, list[str]] = {}
-        for row in dependencies:
-            alias = str(row["alias"])
-            dependency_map.setdefault(alias, set()).add(
-                str(row["strategy_id"])
-            )
-            searchable_dependencies.setdefault(alias, []).extend(
-                (
-                    str(row["strategy_id"]),
-                    str(row["strategy_name"]),
-                )
-            )
-        records: list[ElementRecord] = []
-        for alias in aliases:
-            try:
-                definition = normalize_element_definitions(
-                    {alias: raw[alias]}
-                )[alias]
-            except (TypeError, ValueError):
-                continue
-            record = ElementRecord(
-                id=alias,
-                display_name=alias,
-                management_source="legacy_manual",
-                published_status="probe_unavailable",
-                draft_status=None,
-                scope=str(definition["scope"]),
-                primary_locator_type=str(
-                    definition["locators"][0]["type"]
-                    if definition["locators"]
-                    else ""
-                ),
-                dependency_count=len(dependency_map.get(alias, set())),
-                last_validated_at=None,
-                revision=0,
-                migration_available=True,
-            )
-            if not _legacy_matches(
-                record,
-                query,
-                searchable_dependencies.get(alias, []),
-            ):
-                continue
-            records.append(record)
-        return tuple(records)
-
     def create_draft(
         self,
         payload: object,
@@ -292,35 +180,60 @@ class ElementCatalog:
         actor_username: str = "unknown",
     ) -> ElementRecord:
         element_id = _element_id(self.element_id_factory())
-        display_name, contract = _normalized_create_payload(
-            element_id,
+        display_name, definition = _normalized_create_payload(
             payload,
+            self.allowed_target_origins,
         )
-        self.store.create_managed_element_draft(
+        self.store.create_manual_element_draft(
             element_id=element_id,
             display_name=display_name,
-            contract=contract,
-            scope=str(contract["scope"]),
+            definition=definition,
+            page_key=str(definition["page_key"]),
+            target_origin=str(definition["target_origin"]),
+            url_pattern=str(definition["url_pattern"]),
             actor_user_id=actor_user_id,
             actor_username=actor_username,
         )
         return _required_record(self, element_id)
 
-    def update_draft(
+    def update_name(
         self,
         element_id: str,
-        payload: object,
+        display_name: object,
         expected_revision: int,
         actor_user_id: int,
         actor_username: str = "unknown",
     ) -> ElementRecord:
         selected_id = _element_id(element_id)
-        contract = _normalized_update_payload(selected_id, payload)
-        self.store.update_managed_element_draft(
+        self.store.update_manual_element_name(
             element_id=selected_id,
-            contract=contract,
-            scope=str(contract["scope"]),
-            expected_revision=expected_revision,
+            display_name=_display_name(display_name),
+            expected_revision=_positive_revision(expected_revision),
+            actor_user_id=actor_user_id,
+            actor_username=actor_username,
+        )
+        return _required_record(self, selected_id)
+
+    def rebind(
+        self,
+        element_id: str,
+        definition: object,
+        expected_revision: int,
+        actor_user_id: int,
+        actor_username: str = "unknown",
+    ) -> ElementRecord:
+        selected_id = _element_id(element_id)
+        normalized = _normalized_definition(
+            definition,
+            self.allowed_target_origins,
+        )
+        self.store.rebind_manual_element(
+            element_id=selected_id,
+            definition=normalized,
+            page_key=str(normalized["page_key"]),
+            target_origin=str(normalized["target_origin"]),
+            url_pattern=str(normalized["url_pattern"]),
+            expected_revision=_positive_revision(expected_revision),
             actor_user_id=actor_user_id,
             actor_username=actor_username,
         )
@@ -335,42 +248,10 @@ class ElementCatalog:
     ) -> None:
         self.store.delete_managed_element(
             element_id=_element_id(element_id),
-            expected_revision=expected_revision,
+            expected_revision=_positive_revision(expected_revision),
             actor_user_id=actor_user_id,
             actor_username=actor_username,
         )
-
-    def create_legacy_migration(
-        self,
-        element_id: str,
-        actor_user_id: int,
-        actor_username: str = "unknown",
-        *,
-        expected_revision: int,
-    ) -> ElementRecord:
-        selected_id = _element_id(element_id)
-        if not callable(self.legacy_elements_provider):
-            raise RuntimeError("legacy element provider is unavailable")
-        raw_definitions = self.legacy_elements_provider()
-        if (
-            not isinstance(raw_definitions, Mapping)
-            or selected_id not in raw_definitions
-        ):
-            from selector_probe.store import ElementNotFoundError
-
-            raise ElementNotFoundError(selected_id)
-        definition = normalize_element_definitions(
-            {selected_id: raw_definitions[selected_id]}
-        )[selected_id]
-        self.store.migrate_legacy_element(
-            element_id=selected_id,
-            display_name=selected_id,
-            definition=definition,
-            expected_revision=expected_revision,
-            actor_user_id=actor_user_id,
-            actor_username=actor_username,
-        )
-        return _required_record(self, selected_id)
 
     def require_revision(
         self,
@@ -412,8 +293,6 @@ def _validated_query(value: ElementQuery) -> ElementQuery:
         raise ValueError("invalid_filter")
     if (
         value.status not in ALLOWED_STATUSES
-        or value.source not in ALLOWED_SOURCES
-        or value.scope not in {"all", *ELEMENT_SCOPES}
         or value.referenced not in ALLOWED_REFERENCED
     ):
         raise ValueError("invalid_filter")
@@ -422,154 +301,314 @@ def _validated_query(value: ElementQuery) -> ElementQuery:
         page_size=value.page_size,
         search=search,
         status=value.status,
-        source=value.source,
-        scope=value.scope,
         referenced=value.referenced,
     )
 
 
 def _element_record(row: object) -> ElementRecord:
+    if not isinstance(row, Mapping):
+        try:
+            row = dict(row)
+        except (TypeError, ValueError) as error:
+            raise RuntimeError("managed element row is corrupt") from error
+    last_validated_at = row.get("last_validated_at")
     return ElementRecord(
         id=str(row["id"]),
         display_name=str(row["display_name"]),
-        management_source=str(row["management_source"]),
-        published_status=str(row["published_status"]),
-        draft_status=(
-            str(row["draft_status"])
-            if row["draft_status"] is not None
-            else None
-        ),
-        scope=str(row["scope"]),
+        status=str(row["status"]),
+        page_key=str(row["page_key"]),
         primary_locator_type=str(row["primary_locator_type"]),
         dependency_count=int(row["dependency_count"]),
         last_validated_at=(
-            str(row["last_validated_at"])
-            if row["last_validated_at"] is not None
+            str(last_validated_at)
+            if last_validated_at is not None
             else None
         ),
         revision=int(row["revision"]),
     )
 
 
-def _legacy_matches(
-    record: ElementRecord,
-    query: ElementQuery,
-    dependency_text: list[str],
-) -> bool:
-    if query.status not in {"all", record.runtime_status}:
-        return False
-    if query.source not in {"all", record.management_source}:
-        return False
-    if query.scope not in {"all", record.scope}:
-        return False
-    if query.referenced == "yes" and record.dependency_count == 0:
-        return False
-    if query.referenced == "no" and record.dependency_count > 0:
-        return False
-    if query.search:
-        needle = query.search.casefold()
-        searchable = (
-            record.id,
-            record.display_name,
-            *dependency_text,
-        )
-        if not any(needle in value.casefold() for value in searchable):
-            return False
-    return True
-
-
-def _element_priority(record: ElementRecord) -> tuple[object, ...]:
-    if record.published_status == "failed":
-        priority = 1
-    elif record.published_status == "using_lkg":
-        priority = 2
-    elif record.draft_status is not None:
-        priority = 3
-    elif record.published_status == "probe_unavailable":
-        priority = 4
-    else:
-        priority = 5
-    return (
-        priority,
-        0 if record.last_validated_at is None else 1,
-        record.last_validated_at or "",
-        record.display_name,
-        record.id,
-    )
-
-
 def _element_id(value: object) -> str:
-    if (
-        not isinstance(value, str)
-        or not value
-        or value != value.strip()
-        or len(value) > 128
-        or any(ord(character) < 32 or ord(character) == 127 for character in value)
-    ):
+    if not isinstance(value, str):
         raise ValueError("element_id is invalid")
-    return value
+    selected = value.strip()
+    if not _valid_element_id(selected):
+        raise ValueError("element_id is invalid")
+    return selected
 
 
-def _valid_element_id(value: object) -> bool:
-    try:
-        _element_id(value)
-    except ValueError:
-        return False
-    return True
+def _valid_element_id(value: str) -> bool:
+    return (
+        1 <= len(value) <= 128
+        and "\x00" not in value
+        and all(ord(character) >= 32 for character in value)
+    )
 
 
 def _display_name(value: object) -> str:
     if not isinstance(value, str):
         raise ValueError("display_name is invalid")
-    selected = " ".join(value.split())
-    if not selected or len(selected) > 128:
+    selected = " ".join(value.replace("\x00", "").split())
+    if not 1 <= len(selected) <= 120:
         raise ValueError("display_name is invalid")
     return selected
 
 
 def _normalized_create_payload(
-    element_id: str,
     payload: object,
+    allowed_target_origins: frozenset[str],
 ) -> tuple[str, dict[str, object]]:
-    if not isinstance(payload, Mapping):
-        raise ValueError("element payload must be an object")
-    fields = set(payload)
-    if (
-        not _CREATE_REQUIRED_FIELDS <= fields
-        or not fields <= CREATE_FIELDS
-    ):
+    if not isinstance(payload, Mapping) or set(payload) != CREATE_FIELDS:
         raise ValueError("element payload has an invalid parameter shape")
     display_name = _display_name(payload["display_name"])
-    contract = {
-        "intent": payload["intent"],
-        "required_state": payload["required_state"],
-        "scope": payload["scope"],
-        "accepted_roles": payload.get("accepted_roles", ["button"]),
-        "accepted_names": {
-            "mode": payload.get("name_mode", "exact"),
-            "values": payload.get("accepted_names", [display_name]),
-        },
-        "preferred_attributes": payload.get(
-            "preferred_attributes",
-            ["data-e2e", "aria-label"],
-        ),
-        "postcondition": payload.get("postcondition", ""),
-        "probe_action": payload["probe_action"],
-    }
-    normalized = normalize_contracts({element_id: contract})[element_id]
-    return display_name, normalized.public_dict()
+    definition = _normalized_definition(
+        {key: payload[key] for key in DEFINITION_FIELDS},
+        allowed_target_origins,
+    )
+    return display_name, definition
 
 
-def _normalized_update_payload(
-    element_id: str,
-    payload: object,
+def _normalized_definition(
+    value: object,
+    allowed_target_origins: frozenset[str],
 ) -> dict[str, object]:
-    if not isinstance(payload, Mapping) or set(payload) != {"contract"}:
-        raise ValueError("draft payload has an invalid parameter shape")
-    normalized = normalize_contracts(
-        {element_id: payload["contract"]}
-    )[element_id]
-    return normalized.public_dict()
+    if not isinstance(value, Mapping) or set(value) != DEFINITION_FIELDS:
+        raise ValueError("definition has an invalid parameter shape")
+    page_key = _page_key(value["page_key"])
+    target_origin = _target_origin(
+        value["target_origin"],
+        allowed_target_origins,
+    )
+    url_pattern = _url_pattern(value["url_pattern"], target_origin)
+    operation_steps = _operation_steps(
+        value["operation_steps"],
+        target_origin,
+    )
+    fingerprint = _bounded_json_object(
+        value["fingerprint"],
+        "fingerprint",
+        MAX_FINGERPRINT_JSON_BYTES,
+    )
+    locators = _locators(value["locators"])
+    definition = {
+        "page_key": page_key,
+        "target_origin": target_origin,
+        "url_pattern": url_pattern,
+        "operation_steps": operation_steps,
+        "fingerprint": fingerprint,
+        "locators": locators,
+    }
+    _bounded_json_object(
+        definition,
+        "definition",
+        MAX_DEFINITION_JSON_BYTES,
+    )
+    return definition
+
+
+def _page_key(value: object) -> str:
+    if not isinstance(value, str):
+        raise ValueError("page_key is invalid")
+    selected = value.strip()
+    if _PAGE_KEY_RE.fullmatch(selected) is None:
+        raise ValueError("page_key is invalid")
+    return selected
+
+
+def _allowed_origins(value: object) -> frozenset[str]:
+    if value is None:
+        return _DEFAULT_TARGET_ORIGINS
+    if (
+        not isinstance(value, Sequence)
+        or isinstance(value, (str, bytes, bytearray))
+        or not value
+    ):
+        raise ValueError("allowed_target_origins is invalid")
+    origins: set[str] = set()
+    for raw in value:
+        selected = _canonical_https_origin(raw)
+        hostname = urlsplit(selected).hostname or ""
+        if hostname != "tiktok.com" and not hostname.endswith(".tiktok.com"):
+            raise ValueError("allowed_target_origins is invalid")
+        origins.add(selected)
+    return frozenset(origins)
+
+
+def _target_origin(
+    value: object,
+    allowed_target_origins: frozenset[str],
+) -> str:
+    try:
+        selected = _canonical_https_origin(value)
+    except ValueError as error:
+        raise ValueError("target_origin is invalid") from error
+    if selected not in allowed_target_origins:
+        raise ValueError("target_origin is invalid")
+    return selected
+
+
+def _canonical_https_origin(value: object) -> str:
+    if not isinstance(value, str) or not value or len(value) > 255:
+        raise ValueError("origin is invalid")
+    if any(ord(character) < 33 for character in value):
+        raise ValueError("origin is invalid")
+    try:
+        parsed = urlsplit(value)
+        port = parsed.port
+    except (TypeError, ValueError) as error:
+        raise ValueError("origin is invalid") from error
+    if (
+        parsed.scheme.casefold() != "https"
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path not in {"", "/"}
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise ValueError("origin is invalid")
+    hostname = parsed.hostname.casefold()
+    host = f"[{hostname}]" if ":" in hostname else hostname
+    if port is not None:
+        host = f"{host}:{port}"
+    return f"https://{host}"
+
+
+def _url_pattern(value: object, target_origin: str) -> str:
+    if (
+        not isinstance(value, str)
+        or not 1 <= len(value) <= MAX_URL_PATTERN_LENGTH
+        or any(ord(character) < 33 for character in value)
+    ):
+        raise ValueError("url_pattern is invalid")
+    try:
+        parsed = urlsplit(value)
+        origin = _canonical_https_origin(
+            f"{parsed.scheme}://{parsed.netloc}"
+        )
+    except (TypeError, ValueError) as error:
+        raise ValueError("url_pattern is invalid") from error
+    if (
+        origin != target_origin
+        or parsed.username is not None
+        or parsed.password is not None
+        or not parsed.path.startswith("/")
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise ValueError("url_pattern is invalid")
+    return value
+
+
+def _operation_steps(
+    value: object,
+    target_origin: str,
+) -> list[dict[str, object]]:
+    if not isinstance(value, list) or len(value) > MAX_OPERATION_STEPS:
+        raise ValueError("operation_steps is invalid")
+    result: list[dict[str, object]] = []
+    for expected_sequence, raw in enumerate(value, start=1):
+        if (
+            not isinstance(raw, Mapping)
+            or not {"sequence", "locator"} <= set(raw)
+            or not set(raw) <= _STEP_FIELDS
+        ):
+            raise ValueError("operation_steps is invalid")
+        try:
+            normalized = normalize_recorded_step(raw)
+        except ValueError as error:
+            raise ValueError("operation_steps is invalid") from error
+        if normalized["sequence"] != expected_sequence:
+            raise ValueError("operation_steps is invalid")
+        for url_key in ("url_before", "url_after"):
+            selected_url = str(normalized[url_key])
+            if selected_url and not _url_has_origin(
+                selected_url,
+                target_origin,
+            ):
+                raise ValueError("operation_steps is invalid")
+        result.append(normalized)
+    return result
+
+
+def _url_has_origin(value: str, target_origin: str) -> bool:
+    try:
+        parsed = urlsplit(value)
+        selected = _canonical_https_origin(
+            f"{parsed.scheme}://{parsed.netloc}"
+        )
+    except (TypeError, ValueError):
+        return False
+    return selected == target_origin
+
+
+def _locators(value: object) -> list[dict[str, str]]:
+    if not isinstance(value, list) or not 1 <= len(value) <= MAX_LOCATORS:
+        raise ValueError("locators is invalid")
+    result: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for raw in value:
+        if not isinstance(raw, Mapping) or set(raw) != {"type", "value"}:
+            raise ValueError("locators is invalid")
+        try:
+            normalized = normalize_recorded_step(
+                {"sequence": 1, "locator": raw}
+            )["locator"]
+        except ValueError as error:
+            raise ValueError("locators is invalid") from error
+        locator = {
+            "type": str(normalized["type"]),
+            "value": str(normalized["value"]),
+        }
+        key = (locator["type"], locator["value"])
+        if key in seen:
+            raise ValueError("locators is invalid")
+        seen.add(key)
+        result.append(locator)
+    return result
+
+
+def _bounded_json_object(
+    value: object,
+    name: str,
+    maximum_bytes: int,
+    *,
+    error_type: type[Exception] = ValueError,
+) -> dict[str, object]:
+    if not isinstance(value, Mapping):
+        raise error_type(f"{name} is invalid")
+    try:
+        encoded = json.dumps(
+            dict(value),
+            ensure_ascii=False,
+            allow_nan=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+    except (RecursionError, TypeError, ValueError, OverflowError) as error:
+        raise error_type(f"{name} is invalid") from error
+    if len(encoded) > maximum_bytes:
+        raise error_type(f"{name} is invalid")
+    try:
+        decoded = json.loads(encoded)
+    except (RecursionError, TypeError, ValueError) as error:
+        raise error_type(f"{name} is invalid") from error
+    if not isinstance(decoded, dict) or not _finite_json(decoded):
+        raise error_type(f"{name} is invalid")
+    return decoded
+
+
+def _finite_json(value: object) -> bool:
+    if isinstance(value, float):
+        return math.isfinite(value)
+    if isinstance(value, Mapping):
+        return all(
+            isinstance(key, str) and _finite_json(item)
+            for key, item in value.items()
+        )
+    if isinstance(value, list):
+        return all(_finite_json(item) for item in value)
+    return value is None or isinstance(value, (str, int, bool))
 
 
 def _positive_revision(value: object) -> int:
@@ -588,35 +627,17 @@ def _required_record(
     return record
 
 
-def _decoded_json_object(value: object, name: str) -> dict[str, object]:
-    decoded = _decoded_json(value, name)
-    if not isinstance(decoded, dict):
-        raise RuntimeError(f"{name} is corrupt")
-    return decoded
-
-
-def _decoded_json_array(value: object, name: str) -> list[object]:
-    decoded = _decoded_json(value, name)
-    if not isinstance(decoded, list):
-        raise RuntimeError(f"{name} is corrupt")
-    return decoded
-
-
-def _decoded_json(value: object, name: str) -> object:
-    if not isinstance(value, str):
-        raise RuntimeError(f"{name} is corrupt")
-    try:
-        return json.loads(value)
-    except (RecursionError, TypeError, ValueError) as error:
-        raise RuntimeError(f"{name} is corrupt") from error
-
-
 __all__ = [
     "ALLOWED_PAGE_SIZES",
     "ALLOWED_STATUSES",
     "CREATE_FIELDS",
+    "DEFINITION_FIELDS",
+    "ELEMENT_STATUSES",
     "ElementCatalog",
     "ElementQuery",
+    "MAX_DEFINITION_JSON_BYTES",
+    "MAX_LOCATORS",
+    "MAX_OPERATION_STEPS",
     "MAX_SQLITE_INTEGER",
     "PageResult",
 ]

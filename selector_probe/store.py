@@ -8,9 +8,11 @@ from pathlib import Path
 import re
 import secrets
 import sqlite3
+from urllib.parse import urlsplit
 import uuid
 
 from browser_element_schema import ELEMENT_SCOPES, normalize_element_definitions
+from selector_probe.inventory import normalize_recorded_step
 
 
 SCHEMA = """
@@ -204,6 +206,16 @@ ON probe_effect_outbox(status, id);
 CREATE TABLE IF NOT EXISTS managed_elements (
     id TEXT PRIMARY KEY,
     display_name TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending_rebind' CHECK (
+        status IN (
+            'pending_rebind', 'draft', 'validating', 'healthy',
+            'degraded', 'invalid', 'disabled'
+        )
+    ),
+    page_key TEXT NOT NULL DEFAULT '',
+    target_origin TEXT NOT NULL DEFAULT '',
+    url_pattern TEXT NOT NULL DEFAULT '',
+    last_known_good_version_id TEXT NOT NULL DEFAULT '',
     management_source TEXT NOT NULL CHECK (
         management_source IN ('automatic', 'legacy_manual', 'disabled')
     ),
@@ -228,6 +240,7 @@ CREATE TABLE IF NOT EXISTS managed_elements (
 CREATE TABLE IF NOT EXISTS element_drafts (
     element_id TEXT PRIMARY KEY
         REFERENCES managed_elements(id) ON DELETE CASCADE,
+    definition_json TEXT NOT NULL DEFAULT 'null',
     contract_json TEXT NOT NULL,
     candidates_json TEXT NOT NULL DEFAULT '[]',
     validation_json TEXT NOT NULL DEFAULT '{}',
@@ -367,12 +380,46 @@ CREATE TABLE IF NOT EXISTS element_request_outbox (
 );
 CREATE INDEX IF NOT EXISTS idx_element_request_outbox_claim
 ON element_request_outbox(status, next_attempt_at, lease_until, created_at);
+CREATE TABLE IF NOT EXISTS selector_storage_migrations (
+    name TEXT PRIMARY KEY,
+    status TEXT NOT NULL CHECK (status IN ('blocked', 'completed')),
+    details_json TEXT NOT NULL DEFAULT '{}',
+    updated_at TEXT NOT NULL
+);
 """
 
 _KEY_SEGMENT = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
 _HASH = re.compile(r"^sha256:[0-9a-f]{64}$")
 _PROFILE_MASK = re.compile(r"^\*\*\*(?:.{4})?$", re.DOTALL)
 _CANDIDATE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+_MANUAL_PAGE_KEY = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,119}\Z")
+_MANUAL_DEFINITION_FIELDS = frozenset(
+    {
+        "page_key",
+        "target_origin",
+        "url_pattern",
+        "operation_steps",
+        "fingerprint",
+        "locators",
+    }
+)
+_MANUAL_STEP_FIELDS = frozenset(
+    {
+        "sequence",
+        "locator",
+        "url_before",
+        "url_after",
+        "recorded_at",
+        "frame_key",
+        "shadow",
+        "shadow_key",
+    }
+)
+_MAX_MANUAL_DEFINITION_BYTES = 64 * 1024
+_MAX_MANUAL_FINGERPRINT_BYTES = 16 * 1024
+_MAX_MANUAL_OPERATION_STEPS = 20
+_MAX_MANUAL_LOCATORS = 6
+_MAX_MANUAL_URL_PATTERN = 2000
 INFRASTRUCTURE_RETRY_SECONDS = (900, 1800, 3600)
 ELEMENT_REQUEST_RETRY_SECONDS = (15, 30, 60)
 MANAGEMENT_PENDING_LEASE_SECONDS = 300
@@ -399,6 +446,10 @@ class ElementRequestConflictError(RuntimeError):
 
 
 class ElementRequestInProgressError(RuntimeError):
+    pass
+
+
+class LegacyElementWorkflowRetiredError(RuntimeError):
     pass
 
 
@@ -549,6 +600,7 @@ class SelectorProbeStore:
         self._migrate_element_publication_workflow()
         self._migrate_management_idempotency()
         self._migrate_management_run_lifecycle()
+        self._migrate_manual_storage_final()
 
     def __enter__(self) -> SelectorProbeStore:
         return self
@@ -559,6 +611,209 @@ class SelectorProbeStore:
 
     def close(self) -> None:
         self.connection.close()
+
+    def migrate_manual_elements(self) -> None:
+        """Idempotently add v2 manual-element storage to a legacy database."""
+        self._migrate_element_catalog_schema()
+        self._migrate_manual_storage_final()
+
+    def manual_storage_migration_state(self) -> dict[str, object]:
+        row = self.connection.execute(
+            """
+            SELECT status, details_json, updated_at
+            FROM selector_storage_migrations
+            WHERE name = 'manual_element_inventory_v3'
+            """
+        ).fetchone()
+        if row is None:
+            return {"status": "pending", "details": {}, "updated_at": ""}
+        return {
+            "status": str(row["status"]),
+            "details": _decode_json_object(
+                row["details_json"],
+                "manual storage migration details",
+            ),
+            "updated_at": str(row["updated_at"]),
+        }
+
+    def _migrate_manual_storage_final(self) -> None:
+        """Retire semantic element storage without risking in-flight work.
+
+        Physical column removal is intentionally deferred: legacy publication
+        fencing is spread across the store and rebuilding those tables in the
+        startup transaction would make crash recovery unsafe.  This migration
+        first severs all new writes, clears semantic payloads only after old
+        requests are terminal, and records the exact deferred cleanup surface.
+        """
+
+        migration_name = "manual_element_inventory_v3"
+        now = _utc_now()
+        self.connection.execute("BEGIN IMMEDIATE")
+        try:
+            applied = self.connection.execute(
+                """
+                SELECT status
+                FROM selector_storage_migrations
+                WHERE name = ?
+                """,
+                (migration_name,),
+            ).fetchone()
+            if applied is not None and applied["status"] == "completed":
+                self.connection.commit()
+                return
+            active_requests = self.connection.execute(
+                """
+                SELECT COUNT(*)
+                FROM element_request_outbox
+                WHERE status IN ('pending', 'processing', 'publishing')
+                """
+            ).fetchone()[0]
+            linked_publications = self.connection.execute(
+                """
+                SELECT COUNT(*)
+                FROM publication_outbox
+                WHERE element_request_id <> ''
+                  AND status IN ('pending', 'processing')
+                """
+            ).fetchone()[0]
+            linked_versions = self.connection.execute(
+                """
+                SELECT COUNT(*)
+                FROM selector_versions
+                WHERE element_request_id <> ''
+                  AND status IN ('validated', 'rollback_draft')
+                """
+            ).fetchone()[0]
+            if active_requests or linked_publications or linked_versions:
+                details = {
+                    "reason": "legacy_element_publication_in_progress",
+                    "active_requests": int(active_requests),
+                    "linked_publications": int(linked_publications),
+                    "linked_versions": int(linked_versions),
+                    "legacy_storage_preserved": True,
+                }
+                self.connection.execute(
+                    """
+                    INSERT INTO selector_storage_migrations (
+                        name, status, details_json, updated_at
+                    ) VALUES (?, 'blocked', ?, ?)
+                    ON CONFLICT(name) DO UPDATE SET
+                        status = 'blocked',
+                        details_json = excluded.details_json,
+                        updated_at = excluded.updated_at
+                    """,
+                    (migration_name, _json(details), now),
+                )
+                self.connection.commit()
+                return
+
+            orphan_rows = self.connection.execute(
+                """
+                SELECT contract.alias, MIN(contract.updated_at) AS updated_at
+                FROM element_probe_contracts contract
+                LEFT JOIN managed_elements managed
+                    ON managed.id = contract.alias
+                WHERE managed.id IS NULL
+                GROUP BY contract.alias
+                ORDER BY contract.alias
+                """
+            ).fetchall()
+            for row in orphan_rows:
+                element_id = str(row["alias"])
+                timestamp = str(row["updated_at"] or now)
+                self.connection.execute(
+                    """
+                    INSERT OR IGNORE INTO managed_elements (
+                        id, display_name, status, page_key, target_origin,
+                        url_pattern, last_known_good_version_id,
+                        management_source, published_status, draft_status,
+                        active_version_id, scope, primary_locator_type,
+                        last_validated_at, revision, created_at, updated_at
+                    ) VALUES (
+                        ?, ?, 'pending_rebind', '', '', '', '',
+                        'legacy_manual', 'probe_unavailable', 'draft', '',
+                        'page', '', NULL, 1, ?, ?
+                    )
+                    """,
+                    (element_id, element_id, timestamp, timestamp),
+                )
+                self.connection.execute(
+                    """
+                    INSERT OR IGNORE INTO element_drafts (
+                        element_id, definition_json, contract_json,
+                        candidates_json, validation_json, base_version_id,
+                        revision, created_by, created_by_username,
+                        created_at, updated_at
+                    ) VALUES (?, 'null', '{}', '[]', '{}', '', 1, 1,
+                              'migration', ?, ?)
+                    """,
+                    (element_id, timestamp, timestamp),
+                )
+
+            # The old semantic payload is not projected into definition_json.
+            # Existing manual definitions remain untouched.
+            self.connection.execute(
+                """
+                UPDATE element_drafts
+                SET contract_json = '{}', candidates_json = '[]'
+                WHERE contract_json <> '{}' OR candidates_json <> '[]'
+                """
+            )
+            self.connection.execute(
+                """
+                UPDATE selector_versions
+                SET model_id = '', prompt_version = ''
+                WHERE model_id <> '' OR prompt_version <> ''
+                """
+            )
+            if orphan_rows:
+                _bump_element_catalog_revision(self.connection)
+            details = {
+                "orphan_elements_migrated": len(orphan_rows),
+                "semantic_payloads_cleared": True,
+                "legacy_writes_retired": True,
+                "physical_cleanup_deferred": [
+                    "element_probe_contracts",
+                    "element_drafts.contract_json",
+                    "element_drafts.candidates_json",
+                    "element_request_outbox",
+                    "selector_versions.model_id",
+                    "selector_versions.prompt_version",
+                    "selector_versions.element_request_id",
+                    "selector_versions.element_request_generation",
+                    "publication_outbox.element_request_id",
+                    "publication_outbox.element_request_generation",
+                ],
+            }
+            self.connection.execute(
+                """
+                INSERT INTO selector_storage_migrations (
+                    name, status, details_json, updated_at
+                ) VALUES (?, 'completed', ?, ?)
+                ON CONFLICT(name) DO UPDATE SET
+                    status = 'completed',
+                    details_json = excluded.details_json,
+                    updated_at = excluded.updated_at
+                """,
+                (migration_name, _json(details), now),
+            )
+            self.connection.commit()
+        except BaseException:
+            self.connection.rollback()
+            raise
+
+    def _assert_legacy_element_workflow_open(self) -> None:
+        row = self.connection.execute(
+            """
+            SELECT status
+            FROM selector_storage_migrations
+            WHERE name = 'manual_element_inventory_v3'
+            """
+        ).fetchone()
+        if row is not None and row["status"] == "completed":
+            raise LegacyElementWorkflowRetiredError(
+                "legacy semantic element workflow is retired"
+            )
 
     def _migrate_management_run_lifecycle(self) -> None:
         columns = {
@@ -716,6 +971,15 @@ class SelectorProbeStore:
             ).fetchall()
         }
         additions = {
+            "status": (
+                "TEXT NOT NULL DEFAULT 'pending_rebind' CHECK ("
+                "status IN ('pending_rebind','draft','validating','healthy',"
+                "'degraded','invalid','disabled'))"
+            ),
+            "page_key": "TEXT NOT NULL DEFAULT ''",
+            "target_origin": "TEXT NOT NULL DEFAULT ''",
+            "url_pattern": "TEXT NOT NULL DEFAULT ''",
+            "last_known_good_version_id": "TEXT NOT NULL DEFAULT ''",
             "scope": "TEXT NOT NULL DEFAULT 'page'",
             "primary_locator_type": "TEXT NOT NULL DEFAULT ''",
         }
@@ -737,12 +1001,42 @@ class SelectorProbeStore:
                 if name not in refreshed:
                     raise
 
+        with self.connection:
+            self.connection.execute(
+                """
+                UPDATE managed_elements
+                SET last_known_good_version_id = active_version_id
+                WHERE status = 'pending_rebind'
+                  AND last_known_good_version_id = ''
+                  AND active_version_id <> ''
+                """
+            )
+
         draft_columns = {
             row["name"]
             for row in self.connection.execute(
                 "PRAGMA table_info(element_drafts)"
             ).fetchall()
         }
+        if "definition_json" not in draft_columns:
+            try:
+                with self.connection:
+                    self.connection.execute(
+                        """
+                        ALTER TABLE element_drafts
+                        ADD COLUMN definition_json TEXT NOT NULL DEFAULT 'null'
+                        """
+                    )
+            except sqlite3.OperationalError:
+                refreshed = {
+                    row["name"]
+                    for row in self.connection.execute(
+                        "PRAGMA table_info(element_drafts)"
+                    ).fetchall()
+                }
+                if "definition_json" not in refreshed:
+                    raise
+            draft_columns.add("definition_json")
         foreign_tables = {
             row["table"]
             for row in self.connection.execute(
@@ -783,6 +1077,7 @@ class SelectorProbeStore:
                 CREATE TABLE element_drafts (
                     element_id TEXT PRIMARY KEY
                         REFERENCES managed_elements(id) ON DELETE CASCADE,
+                    definition_json TEXT NOT NULL DEFAULT 'null',
                     contract_json TEXT NOT NULL,
                     candidates_json TEXT NOT NULL DEFAULT '[]',
                     validation_json TEXT NOT NULL DEFAULT '{}',
@@ -805,6 +1100,7 @@ class SelectorProbeStore:
                 f"""
                 INSERT INTO element_drafts (
                     element_id,
+                    definition_json,
                     contract_json,
                     candidates_json,
                     validation_json,
@@ -816,6 +1112,7 @@ class SelectorProbeStore:
                     updated_at
                 )
                 SELECT element_id,
+                       definition_json,
                        contract_json,
                        candidates_json,
                        validation_json,
@@ -2272,7 +2569,11 @@ class SelectorProbeStore:
             """
             SELECT scheduled_for
             FROM probe_runs
-            WHERE status IN ('completed', 'selector_validation_failed')
+            WHERE status IN (
+                'completed',
+                'selector_validation_failed',
+                'awaiting_element_selection'
+            )
             """
         ).fetchall()
         slots = [_scheduled_slot(row["scheduled_for"])[1] for row in rows]
@@ -2301,6 +2602,7 @@ class SelectorProbeStore:
         return result
 
     def save_contracts(self, contracts: object) -> None:
+        self._assert_legacy_element_workflow_open()
         prepared = _prepare_contracts(contracts)
         updated_at = _utc_now()
         scopes = sorted(
@@ -2346,6 +2648,7 @@ class SelectorProbeStore:
             )
 
     def seed_contracts(self, contracts: object) -> int:
+        self._assert_legacy_element_workflow_open()
         prepared = _prepare_contracts(contracts)
         updated_at = _utc_now()
         inserted = 0
@@ -2383,6 +2686,7 @@ class SelectorProbeStore:
         environment: str = "production",
         enabled: bool = True,
     ) -> None:
+        self._assert_legacy_element_workflow_open()
         if not isinstance(contract, Mapping):
             raise ValueError("contract must be a JSON object")
         prepared = _prepare_contracts(
@@ -2421,6 +2725,7 @@ class SelectorProbeStore:
         environment: str = "production",
         enabled_only: bool = True,
     ) -> dict[str, dict[str, object]]:
+        self._assert_legacy_element_workflow_open()
         site_value = _required_text(site, "site")
         environment_value = _required_text(environment, "environment")
         if not isinstance(enabled_only, bool):
@@ -2520,8 +2825,8 @@ class SelectorProbeStore:
         bundle: object,
         evidence: object,
         base_version_id: str,
-        model_id: str,
-        prompt_version: str,
+        model_id: str = "",
+        prompt_version: str = "",
         site: str = "tiktok",
         environment: str = "production",
         probe_run_id: int | None = None,
@@ -2541,8 +2846,12 @@ class SelectorProbeStore:
             base_version_id,
             "base_version_id",
         )
-        model = _required_text_or_empty(model_id, "model_id")
-        prompt = _required_text_or_empty(prompt_version, "prompt_version")
+        # Kept as ignored keyword arguments for one release so older callers
+        # can publish deterministic bundles without persisting model metadata.
+        _required_text_or_empty(model_id, "model_id")
+        _required_text_or_empty(prompt_version, "prompt_version")
+        model = ""
+        prompt = ""
         site_value = _key_segment(site, "site")
         environment_value = _key_segment(environment, "environment")
         token = _required_text_or_empty(attempt_token, "attempt_token")
@@ -2668,8 +2977,6 @@ class SelectorProbeStore:
                     bundle_json=collision_bundle_json,
                     bundle_hash=bundle_hash,
                     evidence_json=evidence_json,
-                    model_id=model,
-                    prompt_version=prompt,
                 ):
                     _ensure_single_outbox(
                         self.connection,
@@ -3502,6 +3809,11 @@ class SelectorProbeStore:
             if last_validated_at is None
             else _iso_timestamp(last_validated_at, "last_validated_at")
         )
+        v2_status = _legacy_element_status(
+            published_status,
+            draft_status,
+            active_version,
+        )
         actor_id = _positive_integer(actor_user_id, "actor_user_id")
         actor_name = _gate_text(actor_username, "actor_username")
         now = _utc_now()
@@ -3524,6 +3836,7 @@ class SelectorProbeStore:
                 INSERT INTO managed_elements (
                     id,
                     display_name,
+                    status,
                     management_source,
                     published_status,
                     draft_status,
@@ -3534,9 +3847,10 @@ class SelectorProbeStore:
                     revision,
                     created_at,
                     updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     display_name = excluded.display_name,
+                    status = excluded.status,
                     management_source = excluded.management_source,
                     published_status = excluded.published_status,
                     draft_status = excluded.draft_status,
@@ -3550,6 +3864,7 @@ class SelectorProbeStore:
                 (
                     selected_id,
                     selected_name,
+                    v2_status,
                     management_source,
                     published_status,
                     draft_status,
@@ -3914,9 +4229,9 @@ class SelectorProbeStore:
         page_size: int,
         search: str,
         status: str,
-        source: str,
-        scope: str,
         referenced: str,
+        source: str = "all",
+        scope: str = "all",
     ) -> tuple[tuple[sqlite3.Row, ...], int, int]:
         clauses: list[str] = []
         arguments: list[object] = []
@@ -3942,12 +4257,8 @@ class SelectorProbeStore:
                 """
             )
             arguments.extend((pattern, pattern, pattern, pattern))
-        if status == "draft":
-            clauses.append("m.draft_status IS NOT NULL")
-        elif status != "all":
-            clauses.append(
-                "m.draft_status IS NULL AND m.published_status = ?"
-            )
+        if status != "all":
+            clauses.append("m.status = ?")
             arguments.append(status)
         if source != "all":
             clauses.append("m.management_source = ?")
@@ -3998,10 +4309,10 @@ class SelectorProbeStore:
                 WHERE {where_sql}
                 ORDER BY
                     CASE
-                        WHEN m.published_status = 'failed' THEN 1
-                        WHEN m.published_status = 'using_lkg' THEN 2
-                        WHEN m.draft_status IS NOT NULL THEN 3
-                        WHEN m.published_status = 'probe_unavailable' THEN 4
+                        WHEN m.status = 'invalid' THEN 1
+                        WHEN m.status = 'degraded' THEN 2
+                        WHEN m.status = 'pending_rebind' THEN 3
+                        WHEN m.status IN ('draft', 'validating') THEN 4
                         ELSE 5
                     END,
                     CASE
@@ -4074,6 +4385,315 @@ class SelectorProbeStore:
             (selected_id,),
         ).fetchone()
 
+    def manual_element_definition(
+        self,
+        element_id: str,
+    ) -> dict[str, object] | None:
+        row = self.connection.execute(
+            """
+            SELECT definition_json
+            FROM element_drafts
+            WHERE element_id = ?
+            """,
+            (_gate_text(element_id, "element_id"),),
+        ).fetchone()
+        if row is None:
+            return None
+        try:
+            value = json.loads(str(row["definition_json"]))
+        except (RecursionError, TypeError, ValueError) as error:
+            raise RuntimeError("manual element definition is corrupt") from error
+        if value is None:
+            return None
+        if not isinstance(value, dict):
+            raise RuntimeError("manual element definition is corrupt")
+        return value
+
+    def create_manual_element_draft(
+        self,
+        *,
+        element_id: str,
+        display_name: str,
+        definition: Mapping[str, object],
+        page_key: str,
+        target_origin: str,
+        url_pattern: str,
+        actor_user_id: int,
+        actor_username: str,
+    ) -> int:
+        selected_id = _gate_text(element_id, "element_id")
+        selected_name = _gate_text(display_name, "display_name")
+        selected_page = _gate_text(page_key, "page_key")
+        selected_origin = _required_text(target_origin, "target_origin")
+        selected_pattern = _required_text(url_pattern, "url_pattern")
+        definition_json, primary_type, normalized = (
+            _manual_definition_payload(definition)
+        )
+        if (
+            selected_page != normalized["page_key"]
+            or selected_origin != normalized["target_origin"]
+            or selected_pattern != normalized["url_pattern"]
+        ):
+            raise ValueError("definition storage fields do not match")
+        actor_id, actor_name = _selector_actor(
+            actor_user_id,
+            actor_username,
+        )
+        now = _utc_now()
+        self.connection.execute("BEGIN IMMEDIATE")
+        try:
+            if self.connection.execute(
+                "SELECT 1 FROM managed_elements WHERE id = ?",
+                (selected_id,),
+            ).fetchone() is not None:
+                raise ElementAlreadyExistsError(selected_id)
+            self.connection.execute(
+                """
+                INSERT INTO managed_elements (
+                    id, display_name, status, page_key, target_origin,
+                    url_pattern, active_version_id,
+                    last_known_good_version_id, primary_locator_type,
+                    last_validated_at, revision, created_at, updated_at,
+                    management_source, published_status, draft_status, scope
+                ) VALUES (?, ?, 'draft', ?, ?, ?, '', '', ?, NULL, 1, ?, ?,
+                          'automatic', 'probe_unavailable', 'draft', ?)
+                """,
+                (
+                    selected_id,
+                    selected_name,
+                    selected_page,
+                    selected_origin,
+                    selected_pattern,
+                    primary_type,
+                    now,
+                    now,
+                    selected_page,
+                ),
+            )
+            self.connection.execute(
+                """
+                INSERT INTO element_drafts (
+                    element_id, definition_json, contract_json,
+                    candidates_json, validation_json, base_version_id,
+                    revision, created_by, created_by_username,
+                    created_at, updated_at
+                ) VALUES (?, ?, '{}', '[]', '{}', '', 1, ?, ?, ?, ?)
+                """,
+                (
+                    selected_id,
+                    definition_json,
+                    actor_id,
+                    actor_name,
+                    now,
+                    now,
+                ),
+            )
+            _bump_element_catalog_revision(self.connection)
+            _insert_selector_management_audit(
+                self.connection,
+                actor_user_id=actor_id,
+                actor_username=actor_name,
+                event_type="element_created",
+                target_id=selected_id,
+                details={"page_key": selected_page, "status": "draft"},
+                created_at=now,
+            )
+            self.connection.commit()
+            return 1
+        except BaseException:
+            self.connection.rollback()
+            raise
+
+    def update_manual_element_name(
+        self,
+        *,
+        element_id: str,
+        display_name: str,
+        expected_revision: int,
+        actor_user_id: int,
+        actor_username: str,
+    ) -> int:
+        selected_id = _gate_text(element_id, "element_id")
+        selected_name = _gate_text(display_name, "display_name")
+        expected = _positive_integer(expected_revision, "expected_revision")
+        actor_id, actor_name = _selector_actor(
+            actor_user_id,
+            actor_username,
+        )
+        now = _utc_now()
+        self.connection.execute("BEGIN IMMEDIATE")
+        try:
+            row = self.connection.execute(
+                "SELECT revision FROM managed_elements WHERE id = ?",
+                (selected_id,),
+            ).fetchone()
+            if row is None:
+                raise ElementNotFoundError(selected_id)
+            _assert_no_element_request_in_progress(
+                self.connection,
+                selected_id,
+            )
+            if int(row["revision"]) != expected:
+                raise StaleElementRevisionError(selected_id)
+            revision = expected + 1
+            self.connection.execute(
+                """
+                UPDATE managed_elements
+                SET display_name = ?, revision = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (selected_name, revision, now, selected_id),
+            )
+            _bump_element_catalog_revision(self.connection)
+            _insert_selector_management_audit(
+                self.connection,
+                actor_user_id=actor_id,
+                actor_username=actor_name,
+                event_type="element_name_updated",
+                target_id=selected_id,
+                details={"revision": revision},
+                created_at=now,
+            )
+            self.connection.commit()
+            return revision
+        except BaseException:
+            self.connection.rollback()
+            raise
+
+    def rebind_manual_element(
+        self,
+        *,
+        element_id: str,
+        definition: Mapping[str, object],
+        page_key: str,
+        target_origin: str,
+        url_pattern: str,
+        expected_revision: int,
+        actor_user_id: int,
+        actor_username: str,
+    ) -> int:
+        selected_id = _gate_text(element_id, "element_id")
+        selected_page = _gate_text(page_key, "page_key")
+        selected_origin = _required_text(target_origin, "target_origin")
+        selected_pattern = _required_text(url_pattern, "url_pattern")
+        definition_json, primary_type, normalized = (
+            _manual_definition_payload(definition)
+        )
+        if (
+            selected_page != normalized["page_key"]
+            or selected_origin != normalized["target_origin"]
+            or selected_pattern != normalized["url_pattern"]
+        ):
+            raise ValueError("definition storage fields do not match")
+        expected = _positive_integer(expected_revision, "expected_revision")
+        actor_id, actor_name = _selector_actor(
+            actor_user_id,
+            actor_username,
+        )
+        now = _utc_now()
+        self.connection.execute("BEGIN IMMEDIATE")
+        try:
+            row = self.connection.execute(
+                """
+                SELECT revision, active_version_id
+                FROM managed_elements
+                WHERE id = ?
+                """,
+                (selected_id,),
+            ).fetchone()
+            if row is None:
+                raise ElementNotFoundError(selected_id)
+            _assert_no_element_request_in_progress(
+                self.connection,
+                selected_id,
+            )
+            if int(row["revision"]) != expected:
+                raise StaleElementRevisionError(selected_id)
+            revision = expected + 1
+            self.connection.execute(
+                """
+                UPDATE managed_elements
+                SET status = 'draft', page_key = ?, target_origin = ?,
+                    url_pattern = ?, primary_locator_type = ?,
+                    draft_status = 'draft', scope = ?, revision = ?,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    selected_page,
+                    selected_origin,
+                    selected_pattern,
+                    primary_type,
+                    selected_page,
+                    revision,
+                    now,
+                    selected_id,
+                ),
+            )
+            current_draft = self.connection.execute(
+                """
+                SELECT revision, created_at
+                FROM element_drafts
+                WHERE element_id = ?
+                """,
+                (selected_id,),
+            ).fetchone()
+            draft_revision = (
+                int(current_draft["revision"]) + 1
+                if current_draft is not None
+                else 1
+            )
+            created_at = (
+                str(current_draft["created_at"])
+                if current_draft is not None
+                else now
+            )
+            self.connection.execute(
+                """
+                INSERT INTO element_drafts (
+                    element_id, definition_json, contract_json,
+                    candidates_json, validation_json, base_version_id,
+                    revision, created_by, created_by_username,
+                    created_at, updated_at
+                ) VALUES (?, ?, '{}', '[]', '{}', ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(element_id) DO UPDATE SET
+                    definition_json = excluded.definition_json,
+                    contract_json = '{}',
+                    candidates_json = '[]',
+                    validation_json = '{}',
+                    base_version_id = excluded.base_version_id,
+                    revision = excluded.revision,
+                    created_by = excluded.created_by,
+                    created_by_username = excluded.created_by_username,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    selected_id,
+                    definition_json,
+                    str(row["active_version_id"]),
+                    draft_revision,
+                    actor_id,
+                    actor_name,
+                    created_at,
+                    now,
+                ),
+            )
+            _bump_element_catalog_revision(self.connection)
+            _insert_selector_management_audit(
+                self.connection,
+                actor_user_id=actor_id,
+                actor_username=actor_name,
+                event_type="element_rebound",
+                target_id=selected_id,
+                details={"revision": revision, "page_key": selected_page},
+                created_at=now,
+            )
+            self.connection.commit()
+            return revision
+        except BaseException:
+            self.connection.rollback()
+            raise
+
     def create_managed_element_draft(
         self,
         *,
@@ -4108,6 +4728,7 @@ class SelectorProbeStore:
                 INSERT INTO managed_elements (
                     id,
                     display_name,
+                    status,
                     management_source,
                     published_status,
                     draft_status,
@@ -4118,7 +4739,7 @@ class SelectorProbeStore:
                     revision,
                     created_at,
                     updated_at
-                ) VALUES (?, ?, 'automatic', 'probe_unavailable', 'draft',
+                ) VALUES (?, ?, 'draft', 'automatic', 'probe_unavailable', 'draft',
                           '', ?, '', NULL, 1, ?, ?)
                 """,
                 (selected_id, selected_name, scope, now, now),
@@ -4168,6 +4789,7 @@ class SelectorProbeStore:
         elements: Mapping[str, object],
         contracts: Mapping[str, object],
     ) -> int:
+        self._assert_legacy_element_workflow_open()
         normalized = normalize_element_definitions(dict(elements))
         if not isinstance(contracts, Mapping):
             raise ValueError("contracts must be an object")
@@ -4221,11 +4843,11 @@ class SelectorProbeStore:
                 self.connection.execute(
                     """
                     INSERT INTO managed_elements (
-                        id, display_name, management_source,
+                        id, display_name, status, management_source,
                         published_status, draft_status, active_version_id,
                         scope, primary_locator_type, last_validated_at,
                         revision, created_at, updated_at
-                    ) VALUES (?, ?, 'legacy_manual', 'using_lkg', 'draft',
+                    ) VALUES (?, ?, 'pending_rebind', 'legacy_manual', 'using_lkg', 'draft',
                               '', ?, ?, NULL, 1, ?, ?)
                     """,
                     (
@@ -4276,13 +4898,20 @@ class SelectorProbeStore:
         self,
         *,
         element_id: str,
+        display_name: str | None = None,
         contract: Mapping[str, object],
         scope: str,
         expected_revision: int,
         actor_user_id: int,
         actor_username: str,
     ) -> int:
+        self._assert_legacy_element_workflow_open()
         selected_id = _gate_text(element_id, "element_id")
+        selected_name = (
+            _gate_text(display_name, "display_name")
+            if display_name is not None
+            else None
+        )
         if not isinstance(contract, Mapping):
             raise ValueError("contract must be an object")
         contract_json = _json(dict(contract))
@@ -4297,7 +4926,7 @@ class SelectorProbeStore:
         self.connection.execute("BEGIN IMMEDIATE")
         try:
             row = self.connection.execute(
-                "SELECT revision FROM managed_elements WHERE id = ?",
+                "SELECT revision, display_name FROM managed_elements WHERE id = ?",
                 (selected_id,),
             ).fetchone()
             if row is None:
@@ -4309,16 +4938,19 @@ class SelectorProbeStore:
             if int(row["revision"]) != expected:
                 raise StaleElementRevisionError(selected_id)
             revision = expected + 1
+            next_name = selected_name or str(row["display_name"])
             self.connection.execute(
                 """
                 UPDATE managed_elements
-                SET draft_status = 'draft',
+                SET status = 'draft',
+                    draft_status = 'draft',
+                    display_name = ?,
                     scope = ?,
                     revision = ?,
                     updated_at = ?
                 WHERE id = ?
                 """,
-                (scope, revision, now, selected_id),
+                (next_name, scope, revision, now, selected_id),
             )
             current_draft = self.connection.execute(
                 """
@@ -4377,7 +5009,11 @@ class SelectorProbeStore:
                 actor_username=actor_name,
                 event_type="element_draft_updated",
                 target_id=selected_id,
-                details={"revision": revision, "scope": scope},
+                details={
+                    "revision": revision,
+                    "scope": scope,
+                    "display_name": next_name,
+                },
                 created_at=now,
             )
             self.connection.commit()
@@ -4454,6 +5090,7 @@ class SelectorProbeStore:
         actor_user_id: int,
         actor_username: str,
     ) -> int:
+        self._assert_legacy_element_workflow_open()
         selected_id = _gate_text(element_id, "element_id")
         selected_name = _gate_text(display_name, "display_name")
         if (
@@ -4525,6 +5162,7 @@ class SelectorProbeStore:
                 INSERT INTO managed_elements (
                     id,
                     display_name,
+                    status,
                     management_source,
                     published_status,
                     draft_status,
@@ -4535,10 +5173,11 @@ class SelectorProbeStore:
                     revision,
                     created_at,
                     updated_at
-                ) VALUES (?, ?, 'legacy_manual', ?, 'draft', ?, ?, ?, ?,
+                ) VALUES (?, ?, 'draft', 'legacy_manual', ?, 'draft', ?, ?, ?, ?,
                           ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     display_name = excluded.display_name,
+                    status = 'draft',
                     management_source = 'legacy_manual',
                     draft_status = 'draft',
                     scope = excluded.scope,
@@ -4614,6 +5253,7 @@ class SelectorProbeStore:
         actor_user_id: int,
         actor_username: str,
     ) -> dict[str, object]:
+        self._assert_legacy_element_workflow_open()
         selected_id = _gate_text(element_id, "element_id")
         if request_type not in {"probe", "validate"}:
             raise ValueError("request_type is invalid")
@@ -4666,7 +5306,8 @@ class SelectorProbeStore:
             self.connection.execute(
                 """
                 UPDATE managed_elements
-                SET draft_status = 'queued',
+                SET status = 'validating',
+                    draft_status = 'queued',
                     revision = ?,
                     updated_at = ?
                 WHERE id = ? AND revision = ?
@@ -4824,7 +5465,8 @@ class SelectorProbeStore:
             self.connection.execute(
                 """
                 UPDATE managed_elements
-                SET draft_status = ?,
+                SET status = 'validating',
+                    draft_status = ?,
                     updated_at = ?
                 WHERE id = ?
                 """,
@@ -5535,7 +6177,11 @@ class SelectorProbeStore:
             self.connection.execute(
                 """
                 UPDATE managed_elements
-                SET management_source = CASE
+                SET status = CASE
+                        WHEN ? THEN 'healthy'
+                        ELSE 'draft'
+                    END,
+                    management_source = CASE
                         WHEN ? THEN 'automatic'
                         ELSE management_source
                     END,
@@ -5550,6 +6196,10 @@ class SelectorProbeStore:
                     active_version_id = CASE
                         WHEN ? != '' THEN ?
                         ELSE active_version_id
+                    END,
+                    last_known_good_version_id = CASE
+                        WHEN ? != '' THEN ?
+                        ELSE last_known_good_version_id
                     END,
                     primary_locator_type = CASE
                         WHEN ? != '' THEN ?
@@ -5566,6 +6216,9 @@ class SelectorProbeStore:
                     is_validation,
                     is_validation,
                     is_validation,
+                    is_validation,
+                    version,
+                    version,
                     version,
                     version,
                     primary_locator_type,
@@ -5701,11 +6354,21 @@ class SelectorProbeStore:
             self.connection.execute(
                 """
                 UPDATE managed_elements
-                SET draft_status = ?,
+                SET status = CASE
+                        WHEN ? THEN CASE
+                            WHEN active_version_id <> ''
+                              OR last_known_good_version_id <> ''
+                            THEN 'degraded'
+                            ELSE 'invalid'
+                        END
+                        ELSE 'validating'
+                    END,
+                    draft_status = ?,
                     updated_at = ?
                 WHERE id = ?
                 """,
                 (
+                    terminal,
                     "draft" if terminal else "queued",
                     now_text,
                     row["element_id"],
@@ -7191,8 +7854,8 @@ class SelectorProbeStore:
                     _canonical_json(bundle),
                     source["bundle_hash"],
                     source["evidence_json"],
-                    source["model_id"],
-                    source["prompt_version"],
+                    "",
+                    "",
                     timestamp,
                     timestamp,
                 ),
@@ -8092,8 +8755,6 @@ def _same_version_content(
     bundle_json: str,
     bundle_hash: str,
     evidence_json: str,
-    model_id: str,
-    prompt_version: str,
 ) -> bool:
     return (
         row["site"] == site
@@ -8104,8 +8765,6 @@ def _same_version_content(
         and row["bundle_json"] == bundle_json
         and row["bundle_hash"] == bundle_hash
         and row["evidence_json"] == evidence_json
-        and row["model_id"] == model_id
-        and row["prompt_version"] == prompt_version
     )
 
 
@@ -8265,10 +8924,12 @@ def _complete_staged_element_request(
     connection.execute(
         """
         UPDATE managed_elements
-        SET management_source = 'automatic',
+        SET status = 'healthy',
+            management_source = 'automatic',
             published_status = 'healthy',
             draft_status = NULL,
             active_version_id = ?,
+            last_known_good_version_id = ?,
             primary_locator_type = CASE
                 WHEN ? != '' THEN ?
                 ELSE primary_locator_type
@@ -8278,6 +8939,7 @@ def _complete_staged_element_request(
         WHERE id = ?
         """,
         (
+            version_id,
             version_id,
             primary_locator_type,
             primary_locator_type,
@@ -8367,7 +9029,13 @@ def _fail_staged_element_request(
     connection.execute(
         """
         UPDATE managed_elements
-        SET draft_status = 'draft',
+        SET status = CASE
+                WHEN active_version_id <> ''
+                  OR last_known_good_version_id <> ''
+                THEN 'degraded'
+                ELSE 'invalid'
+            END,
+            draft_status = 'draft',
             updated_at = ?
         WHERE id = ?
         """,
@@ -8397,6 +9065,204 @@ def _gate_text(value: object, name: str) -> str:
     ):
         raise ValueError(f"{name} is invalid")
     return text
+
+
+def _manual_definition_payload(
+    value: object,
+) -> tuple[str, str, dict[str, object]]:
+    if not isinstance(value, Mapping) or set(value) != _MANUAL_DEFINITION_FIELDS:
+        raise ValueError("definition has an invalid parameter shape")
+    page_key = value.get("page_key")
+    if (
+        not isinstance(page_key, str)
+        or _MANUAL_PAGE_KEY.fullmatch(page_key) is None
+    ):
+        raise ValueError("definition page_key is invalid")
+    target_origin = _manual_tiktok_origin(value.get("target_origin"))
+    url_pattern = _manual_url_pattern(
+        value.get("url_pattern"),
+        target_origin,
+    )
+    operation_steps = _manual_operation_steps(
+        value.get("operation_steps"),
+        target_origin,
+    )
+    fingerprint = _bounded_manual_json_object(
+        value.get("fingerprint"),
+        "definition fingerprint",
+        _MAX_MANUAL_FINGERPRINT_BYTES,
+    )
+    locators = _manual_locators(value.get("locators"))
+    normalized = {
+        "page_key": page_key,
+        "target_origin": target_origin,
+        "url_pattern": url_pattern,
+        "operation_steps": operation_steps,
+        "fingerprint": fingerprint,
+        "locators": locators,
+    }
+    _bounded_manual_json_object(
+        normalized,
+        "definition",
+        _MAX_MANUAL_DEFINITION_BYTES,
+    )
+    return _json(normalized), str(locators[0]["type"]), normalized
+
+
+def _legacy_element_status(
+    published_status: str,
+    draft_status: str | None,
+    active_version_id: str,
+) -> str:
+    if published_status == "disabled":
+        return "disabled"
+    if draft_status == "validating":
+        return "validating"
+    if draft_status is not None:
+        return "draft"
+    if published_status == "healthy":
+        return "healthy"
+    if published_status == "using_lkg":
+        return "degraded"
+    return "degraded" if active_version_id else "invalid"
+
+
+def _bounded_manual_json_object(
+    value: object,
+    name: str,
+    maximum_bytes: int,
+) -> dict[str, object]:
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{name} is invalid")
+    try:
+        encoded = json.dumps(
+            dict(value),
+            ensure_ascii=False,
+            allow_nan=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        decoded = json.loads(encoded)
+    except (RecursionError, TypeError, ValueError, OverflowError) as error:
+        raise ValueError(f"{name} is invalid") from error
+    if len(encoded) > maximum_bytes or not isinstance(decoded, dict):
+        raise ValueError(f"{name} is invalid")
+    return decoded
+
+
+def _manual_tiktok_origin(value: object) -> str:
+    if not isinstance(value, str) or not value or len(value) > 255:
+        raise ValueError("definition target_origin is invalid")
+    try:
+        parsed = urlsplit(value)
+        port = parsed.port
+    except (TypeError, ValueError) as error:
+        raise ValueError("definition target_origin is invalid") from error
+    hostname = (parsed.hostname or "").casefold()
+    if (
+        parsed.scheme.casefold() != "https"
+        or not hostname
+        or (hostname != "tiktok.com" and not hostname.endswith(".tiktok.com"))
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path not in {"", "/"}
+        or parsed.query
+        or parsed.fragment
+        or any(ord(character) < 33 for character in value)
+    ):
+        raise ValueError("definition target_origin is invalid")
+    host = f"[{hostname}]" if ":" in hostname else hostname
+    if port is not None:
+        host = f"{host}:{port}"
+    return f"https://{host}"
+
+
+def _manual_url_pattern(value: object, target_origin: str) -> str:
+    if (
+        not isinstance(value, str)
+        or not 1 <= len(value) <= _MAX_MANUAL_URL_PATTERN
+        or any(ord(character) < 33 for character in value)
+    ):
+        raise ValueError("definition url_pattern is invalid")
+    try:
+        parsed = urlsplit(value)
+        origin = _manual_tiktok_origin(f"{parsed.scheme}://{parsed.netloc}")
+    except (TypeError, ValueError) as error:
+        raise ValueError("definition url_pattern is invalid") from error
+    if (
+        origin != target_origin
+        or parsed.username is not None
+        or parsed.password is not None
+        or not parsed.path.startswith("/")
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise ValueError("definition url_pattern is invalid")
+    return value
+
+
+def _manual_operation_steps(
+    value: object,
+    target_origin: str,
+) -> list[dict[str, object]]:
+    if not isinstance(value, list) or len(value) > _MAX_MANUAL_OPERATION_STEPS:
+        raise ValueError("definition operation_steps is invalid")
+    result: list[dict[str, object]] = []
+    for expected_sequence, raw in enumerate(value, start=1):
+        if (
+            not isinstance(raw, Mapping)
+            or not {"sequence", "locator"} <= set(raw)
+            or not set(raw) <= _MANUAL_STEP_FIELDS
+        ):
+            raise ValueError("definition operation_steps is invalid")
+        for url_key in ("url_before", "url_after"):
+            raw_url = raw.get(url_key)
+            if raw_url:
+                try:
+                    parsed = urlsplit(str(raw_url))
+                    origin = _manual_tiktok_origin(
+                        f"{parsed.scheme}://{parsed.netloc}"
+                    )
+                except (TypeError, ValueError) as error:
+                    raise ValueError(
+                        "definition operation_steps is invalid"
+                    ) from error
+                if origin != target_origin:
+                    raise ValueError("definition operation_steps is invalid")
+        try:
+            normalized = normalize_recorded_step(raw)
+        except ValueError as error:
+            raise ValueError("definition operation_steps is invalid") from error
+        if normalized["sequence"] != expected_sequence:
+            raise ValueError("definition operation_steps is invalid")
+        result.append(normalized)
+    return result
+
+
+def _manual_locators(value: object) -> list[dict[str, str]]:
+    if not isinstance(value, list) or not 1 <= len(value) <= _MAX_MANUAL_LOCATORS:
+        raise ValueError("definition locators are invalid")
+    result: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for raw in value:
+        if not isinstance(raw, Mapping) or set(raw) != {"type", "value"}:
+            raise ValueError("definition locators are invalid")
+        try:
+            normalized = normalize_recorded_step(
+                {"sequence": 1, "locator": raw}
+            )["locator"]
+        except ValueError as error:
+            raise ValueError("definition locators are invalid") from error
+        locator = {
+            "type": str(normalized["type"]),
+            "value": str(normalized["value"]),
+        }
+        key = (locator["type"], locator["value"])
+        if key in seen:
+            raise ValueError("definition locators are invalid")
+        seen.add(key)
+        result.append(locator)
+    return result
 
 
 def _assert_no_element_request_in_progress(
@@ -9509,8 +10375,6 @@ def _version_row(row: sqlite3.Row) -> dict[str, object]:
         "bundle": _decode_json_object(row["bundle_json"], "version bundle"),
         "bundle_hash": row["bundle_hash"],
         "evidence": _decode_json_object(row["evidence_json"], "version evidence"),
-        "model_id": row["model_id"],
-        "prompt_version": row["prompt_version"],
         "created_at": row["created_at"],
         "validated_at": row["validated_at"],
         "published_at": row["published_at"],

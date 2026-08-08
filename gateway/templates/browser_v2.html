@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>浏览器执行策略 V2</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='dashboard_shell.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='browser_v2.css') }}">
+  <script defer src="{{ url_for('static', filename='browser_v2.js') }}"></script>
+</head>
+<body class="browser-v2-page">
+  <div class="dashboard-shell">
+    {% include '_dashboard_sidebar.html' %}
+    <main class="dashboard-main">
+      <div id="browser-v2-app" class="v2-shell">
+    <header class="v2-header">
+      <div>
+        <p class="v2-eyebrow">V2 独立执行模块</p>
+        <h1>浏览器执行策略</h1>
+        <p class="v2-muted">此页面只使用 V2 数据与接口，不影响旧功能。</p>
+      </div>
+      <p id="v2-live-status" class="v2-status" role="status" aria-live="polite">准备加载</p>
+    </header>
+
+    <nav class="v2-tabs" aria-label="浏览器执行策略 V2">
+      <button type="button" class="v2-tab" data-view="center" aria-current="page">执行中心</button>
+      <button type="button" class="v2-tab" data-view="elements">元素库</button>
+      <button type="button" class="v2-tab" data-view="strategies">策略编辑</button>
+      <button type="button" class="v2-tab" data-view="history">运行历史</button>
+      <button type="button" class="v2-tab" data-view="settings">设置</button>
+    </nav>
+
+    <p id="v2-page-error" class="v2-error" role="alert" aria-live="assertive"></p>
+
+    <section class="v2-view" data-panel="center" aria-labelledby="v2-center-title">
+      <div class="v2-section-heading"><div><h2 id="v2-center-title">执行中心</h2><p>选择策略与浏览器 Profile，按每批 3 个依次执行。</p></div></div>
+      <form id="v2-run-form" class="v2-card v2-form-grid">
+        <label class="v2-span-2">执行策略<select id="v2-run-strategy" required><option value="">请选择策略</option></select></label>
+        <label>每批数量<input id="v2-run-batch-size" type="number" min="1" max="8" value="3" required></label>
+        <fieldset class="v2-span-3"><legend>选择 Profile</legend><div class="v2-actions"><button id="v2-profile-select-all" class="v2-button" type="button">全选</button><button id="v2-profile-clear-all" class="v2-button" type="button">清空</button></div><div id="v2-profile-list" class="v2-check-list"></div></fieldset>
+        <div class="v2-actions v2-span-3"><button id="v2-run-start" class="v2-button primary" type="submit" disabled>开始执行</button><button id="v2-run-cancel" class="v2-button danger" type="button" disabled>取消当前任务</button></div>
+      </form>
+      <section class="v2-card" aria-labelledby="v2-job-title"><h3 id="v2-job-title">当前任务</h3><div id="v2-job-summary" class="v2-metrics"></div><ol id="v2-job-profiles" class="v2-result-list"></ol><p id="v2-job-empty" class="v2-muted">尚未运行任务。</p></section>
+    </section>
+
+    <section class="v2-view" data-panel="elements" aria-labelledby="v2-elements-title" hidden>
+      <div class="v2-section-heading"><div><h2 id="v2-elements-title">元素库</h2><p>点选页面控件后命名保存。可连续保存多个元素。</p></div></div>
+      <form id="v2-picker-form" class="v2-card v2-form-grid">
+        <label>测试 Profile<select id="v2-picker-profile" required disabled></select></label>
+        <label class="v2-span-2">目标网址<input id="v2-picker-url" type="url" value="https://www.tiktok.com/" required></label>
+        <div class="v2-actions v2-span-3"><button id="v2-picker-start" class="v2-button primary" type="submit" disabled>开始点选器</button><button id="v2-picker-finish" class="v2-button" type="button" disabled>完成点选</button><button id="v2-picker-cancel" class="v2-button danger" type="button" disabled>取消点选</button></div>
+      </form>
+      <section class="v2-card" aria-labelledby="v2-picker-title"><h3 id="v2-picker-title">当前点选</h3><p id="v2-picker-state" class="v2-muted">尚未开启点选器。</p><div id="v2-picker-candidates" class="v2-candidates"></div></section>
+      <section class="v2-card" aria-labelledby="v2-elements-list-title"><div class="v2-section-heading"><h3 id="v2-elements-list-title">已保存元素</h3><label>校验 Profile<select id="v2-element-validate-profile" aria-label="校验 Profile" disabled></select></label></div><div id="v2-elements-list" class="v2-list"></div><p id="v2-elements-empty" class="v2-muted">暂无已保存元素。</p></section>
+    </section>
+
+    <section class="v2-view" data-panel="strategies" aria-labelledby="v2-strategies-title" hidden>
+      <div class="v2-section-heading"><div><h2 id="v2-strategies-title">策略编辑</h2><p>用五类动作组合执行顺序。</p></div><button id="v2-strategy-new" class="v2-button primary" type="button">新建策略</button></div>
+      <div class="v2-strategy-layout"><section class="v2-card"><h3>策略列表</h3><div id="v2-strategy-list" class="v2-list"></div></section>
+      <form id="v2-strategy-form" class="v2-card" novalidate><h3>策略内容</h3><p id="v2-strategy-empty" class="v2-muted">选择或新建策略后编辑。</p><div id="v2-strategy-editor" hidden>
+        <div class="v2-form-grid"><label>名称<input id="v2-strategy-name" required></label><label>目标网址<input id="v2-strategy-target-url" type="url" value="https://www.tiktok.com/" required></label><label>就绪元素<select id="v2-strategy-ready-element" required><option value="">请选择</option></select></label><label>就绪超时（秒）<input id="v2-strategy-readiness-timeout" type="number" min="0.1" max="600" step="0.1" value="15" required></label><label>运行方式<select id="v2-strategy-run-mode"><option value="once">执行一次</option><option value="duration">随机分钟范围</option></select></label><label id="v2-strategy-minutes-wrap" hidden>分钟范围<input id="v2-strategy-minutes" type="text" placeholder="例如 2-5"></label><label><input id="v2-strategy-enabled" type="checkbox" checked> 启用此策略</label></div>
+        <fieldset><legend>添加动作</legend><div id="v2-action-palette" class="v2-actions"><button type="button" class="v2-button" data-action-type="move">移动</button><button type="button" class="v2-button" data-action-type="scroll">切换视频</button><button type="button" class="v2-button" data-action-type="click">点击元素</button><button type="button" class="v2-button" data-action-type="input">键盘输入</button><button type="button" class="v2-button" data-action-type="wait">等待</button></div></fieldset>
+        <ol id="v2-action-list" class="v2-action-list"></ol>
+        <div class="v2-actions"><button id="v2-strategy-save" class="v2-button primary" type="submit">保存策略</button><button id="v2-strategy-copy" class="v2-button" type="button">复制</button><button id="v2-strategy-delete" class="v2-button danger" type="button">删除</button></div>
+      </div></form></div>
+    </section>
+
+    <section class="v2-view" data-panel="history" aria-labelledby="v2-history-title" hidden>
+      <div class="v2-section-heading"><div><h2 id="v2-history-title">运行历史</h2><p>查看任务、Profile、执行阶段、动作结果和关闭确认。</p></div><button id="v2-history-refresh" class="v2-button" type="button">刷新</button></div>
+      <section class="v2-card"><div id="v2-history-list" class="v2-list"></div><p id="v2-history-empty" class="v2-muted">暂无运行记录。</p></section>
+    </section>
+
+    <section class="v2-view" data-panel="settings" aria-labelledby="v2-settings-title" hidden>
+      <div class="v2-section-heading"><div><h2 id="v2-settings-title">设置</h2><p>仅保存本机页面偏好。</p></div></div>
+      <section class="v2-card v2-form-grid"><div class="v2-span-3"><h3>V2 说明</h3><p>浏览器打开、动作执行、关闭确认均由 V2 独立处理。</p></div><label>默认每批数量<input id="v2-setting-batch-size" type="number" min="1" max="8" value="3"></label><div class="v2-actions"><button id="v2-settings-save" class="v2-button primary" type="button">保存本机偏好</button></div></section>
+    </section>
+      </div>
+    </main>
+  </div>
+</body>
+</html>

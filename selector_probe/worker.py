@@ -1,4 +1,4 @@
-"""Standalone observe-only selector probe worker."""
+"""Scheduled worker for manually managed selector validation."""
 
 from __future__ import annotations
 
@@ -16,20 +16,17 @@ from typing import Callable
 import uuid
 
 from adspower import AdsPowerController
-from browser_element_schema import normalize_element_definitions
 from gateway.settings_store import load_settings
 from selector_probe.alerts import AlertService
 from selector_probe.config import normalize_probe_config
-from selector_probe.contracts import default_tiktok_contracts
 from selector_probe.gates import StrategyGateService
-from selector_probe.healing_runtime import HealingRuntime
+from selector_probe.managed_runtime import ManagedElementRuntime, ManagedProbeRuntime
 from selector_probe.probe import (
     LEASE_HEARTBEAT_SECONDS,
     LEASE_TTL_SECONDS,
     _LeaseHeartbeat,
-    run_element_probe,
-    run_healing_probe,
-    run_observe_probe,
+    _sanitize_progress_event,
+    run_managed_probe,
 )
 from selector_probe.registry import (
     RedisSelectorRegistry,
@@ -48,51 +45,20 @@ PROBE_STALE_SECONDS = 36 * 60 * 60
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 _SAFE_CODE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 LOGGER = logging.getLogger("selector_probe.worker")
-ELEMENT_REQUEST_TERMINAL_FAILURES = frozenset(
-    {
-        "draft_not_published",
-        "observe_only_validation_disabled",
-        "probe_disabled",
-        "selector_validation_failed",
-    }
+BUSINESS_STAGES = (
+    "prepare_environment",
+    "open_and_replay",
+    "validate_elements",
+    "protect_or_recover",
+    "alert_and_cleanup",
 )
-ELEMENT_REQUEST_CLAIM_RENEW_SECONDS = 120
 REDIS_CONNECT_TIMEOUT_SECONDS = 3.0
 REDIS_SOCKET_TIMEOUT_SECONDS = 5.0
-ELEMENT_REQUEST_RECONCILE_IO_BUDGET_SECONDS = (
-    REDIS_CONNECT_TIMEOUT_SECONDS + (4 * REDIS_SOCKET_TIMEOUT_SECONDS)
-)
-if (
-    ELEMENT_REQUEST_RECONCILE_IO_BUDGET_SECONDS
-    >= ELEMENT_REQUEST_CLAIM_RENEW_SECONDS
-):
-    raise RuntimeError("element request reconcile timeout exceeds claim window")
 
 
 class SystemClock:
     def now(self) -> datetime:
         return datetime.now(UTC)
-
-
-class ElementRequestClaimLost(RuntimeError):
-    code = "claim_lost"
-
-    def __init__(self) -> None:
-        super().__init__(self.code)
-
-
-class ElementRequestRolloutDisabled(RuntimeError):
-    code = "rollout_disabled"
-
-    def __init__(self) -> None:
-        super().__init__(self.code)
-
-
-class ElementRequestProbeDisabled(RuntimeError):
-    code = "probe_disabled"
-
-    def __init__(self) -> None:
-        super().__init__(self.code)
 
 
 def _redis_client(url: str, *, password: str = "") -> object:
@@ -128,8 +94,8 @@ def _reconcile_publication(store: object, registry: object) -> dict:
     return reconcile_registry(store, registry)
 
 
-def _healing_runtime_factory(**kwargs) -> object:
-    return HealingRuntime(**kwargs)
+def _managed_runtime_factory(**kwargs) -> object:
+    return ManagedProbeRuntime(**kwargs)
 
 
 def _error_code(error: BaseException) -> str:
@@ -452,7 +418,7 @@ def _verified_recovery(
             evidence=evidence,
             base_version_id=base_version,
             model_id="",
-            prompt_version="selector-recovery-v1",
+            prompt_version="",
             site=config.site,
             environment=config.environment,
             probe_run_id=run_id,
@@ -575,419 +541,15 @@ def _run_maintenance(
         LOGGER.warning("selector_probe_webhook_delivery_failed")
 
 
-def consume_element_requests(
-    *,
-    store_factory: Callable[[Path], object] = SelectorProbeStore,
-    executor: Callable[[Mapping[str, object]], object] | None = None,
-    db_path: str | Path | None = None,
-    owner_id_factory: Callable[[], str] = lambda: uuid.uuid4().hex,
-    clock: object | None = None,
-    max_requests: int = 10,
-    claim_lease_seconds: int = 120,
-    heartbeat_seconds: float | None = None,
-) -> dict[str, int]:
-    if (
-        isinstance(max_requests, bool)
-        or not isinstance(max_requests, int)
-        or max_requests < 1
-        or max_requests > 100
-    ):
-        raise ValueError("max_requests is invalid")
-    if (
-        isinstance(claim_lease_seconds, bool)
-        or not isinstance(claim_lease_seconds, int)
-        or claim_lease_seconds < 1
-        or claim_lease_seconds > 3600
-    ):
-        raise ValueError("claim_lease_seconds is invalid")
-    heartbeat_interval = heartbeat_seconds or min(
-        30.0,
-        claim_lease_seconds / 3,
-    )
-    if (
-        isinstance(heartbeat_interval, bool)
-        or not isinstance(heartbeat_interval, (int, float))
-        or heartbeat_interval <= 0
-        or heartbeat_interval >= claim_lease_seconds
-    ):
-        raise ValueError("heartbeat_seconds is invalid")
-    selected_db_path = Path(
-        db_path
-        or os.getenv("SELECTOR_PROBE_DB_PATH", "").strip()
-        or PROJECT_ROOT / "data" / "selector-probe.db"
-    )
-    selected_db_path.parent.mkdir(parents=True, exist_ok=True)
-    selected_clock = clock or SystemClock()
-    selected_executor = executor or run_element_request_runtime
-    counts = {"claimed": 0, "completed": 0, "failed": 0, "retried": 0}
-    with store_factory(selected_db_path) as store:
-        claim = getattr(store, "claim_element_request", None)
-        if not callable(claim):
-            return counts
-        for _item in range(max_requests):
-            now = selected_clock.now()
-            request = claim(
-                claim_token=owner_id_factory(),
-                now=now,
-                lease_seconds=claim_lease_seconds,
-            )
-            if request is None:
-                break
-            counts["claimed"] += 1
-            request_id = str(request["request_id"])
-            claim_token = str(request["claim_token"])
-            claim_generation = int(request["claim_generation"])
-            if not store.element_request_claim_is_current(
-                request_id,
-                claim_token,
-                claim_generation,
-            ):
-                outcome = store.fail_element_request(
-                    request_id,
-                    claim_token,
-                    claim_generation,
-                    error_code="stale_revision",
-                    retryable=False,
-                    now=selected_clock.now(),
-                )
-                if outcome is not None:
-                    counts["failed"] += 1
-                continue
-            heartbeat_stop = threading.Event()
-            heartbeat_lost = threading.Event()
-
-            def renew_claim() -> None:
-                while not heartbeat_stop.wait(heartbeat_interval):
-                    try:
-                        with store_factory(selected_db_path) as renew_store:
-                            renewed = renew_store.renew_element_request_claim(
-                                request_id,
-                                claim_token,
-                                claim_generation,
-                                lease_seconds=claim_lease_seconds,
-                            )
-                    except BaseException:
-                        renewed = False
-                    if not renewed:
-                        heartbeat_lost.set()
-                        return
-
-            heartbeat = threading.Thread(
-                target=renew_claim,
-                name=f"selector-element-lease-{request_id[:12]}",
-                daemon=True,
-            )
-            heartbeat.start()
-            try:
-                try:
-                    result = selected_executor(request)
-                    if not isinstance(result, Mapping):
-                        raise RuntimeError("element_request_result_invalid")
-                    status = str(result.get("status") or "")
-                    request_succeeded = (
-                        request["request_type"] == "probe"
-                        and status == "probe_completed"
-                    ) or (
-                        request["request_type"] == "validate"
-                        and status == "published"
-                        and result.get("published") is True
-                        and result.get("reconciled") is True
-                        and isinstance(result.get("new_version"), str)
-                        and bool(result["new_version"])
-                    )
-                    if request_succeeded:
-                        completed = (
-                            not heartbeat_lost.is_set()
-                            and store.complete_element_request(
-                                request_id,
-                                claim_token,
-                                claim_generation,
-                                result=dict(result),
-                                now=selected_clock.now(),
-                            )
-                        )
-                        if completed:
-                            counts["completed"] += 1
-                        elif not heartbeat_lost.is_set():
-                            terminal = store.get_element_request(request_id)
-                            if (
-                                isinstance(terminal, Mapping)
-                                and terminal.get("status") == "completed"
-                            ):
-                                counts["completed"] += 1
-                            elif (
-                                isinstance(terminal, Mapping)
-                                and terminal.get("status") == "failed"
-                            ):
-                                counts["failed"] += 1
-                        continue
-                    error_code = str(
-                        result.get("failure_code")
-                        or (
-                            "draft_not_published"
-                            if request["request_type"] == "validate"
-                            and status in {"completed", "healthy", "passed"}
-                            else status
-                        )
-                        or "probe_unavailable"
-                    )
-                    retryable = (
-                        error_code not in ELEMENT_REQUEST_TERMINAL_FAILURES
-                    )
-                except BaseException as error:
-                    error_code = _error_code(error)
-                    retryable = True
-            finally:
-                heartbeat_stop.set()
-                heartbeat.join(min(heartbeat_interval + 0.5, 2.0))
-            if heartbeat_lost.is_set():
-                continue
-            outcome = store.fail_element_request(
-                request_id,
-                claim_token,
-                claim_generation,
-                error_code=error_code,
-                retryable=retryable,
-                now=selected_clock.now(),
-            )
-            if outcome is not None:
-                counts[
-                    "failed" if outcome["terminal"] else "retried"
-                ] += 1
-    return counts
-
-
-def run_element_request_runtime(
-    request: Mapping[str, object],
-    *,
-    settings_loader: Callable[[], dict] = load_settings,
-    store_factory: Callable[[Path], object] = SelectorProbeStore,
-    redis_factory: Callable[[str], object] = _redis_client,
-    registry_factory: Callable[..., object] = _registry_factory,
-    adspower_factory: Callable[..., object] = AdsPowerController,
-    healing_runtime_factory: Callable[..., object] = _healing_runtime_factory,
-    lease_factory: Callable[..., object] = RedisLease,
-    db_path: str | Path | None = None,
-    redis_url: str | None = None,
-) -> dict[str, object]:
-    if not isinstance(request, Mapping):
-        raise ValueError("element request must be an object")
-    request_type = request.get("request_type")
-    element_id = request.get("element_id")
-    contract = request.get("contract")
-    request_id = request.get("request_id")
-    claim_token = request.get("claim_token")
-    claim_generation = request.get("claim_generation")
-    if (
-        request_type not in {"probe", "validate"}
-        or not isinstance(element_id, str)
-        or not element_id
-        or not isinstance(contract, Mapping)
-        or not contract
-        or not isinstance(request_id, str)
-        or not request_id
-        or not isinstance(claim_token, str)
-        or not claim_token
-        or isinstance(claim_generation, bool)
-        or not isinstance(claim_generation, int)
-        or claim_generation < 1
-    ):
-        raise ValueError("element request is invalid")
-    settings = settings_loader()
-    if not isinstance(settings, dict):
-        raise ValueError("settings loader must return a JSON object")
-    config = normalize_probe_config(settings.get("selector_probe"))
-    if config.enabled is not True:
-        return {
-            "status": "probe_disabled",
-            "failure_code": "probe_disabled",
-        }
-    if request_type == "validate" and config.observe_only:
-        return {
-            "status": "observe_only_validation_disabled",
-            "failure_code": "observe_only_validation_disabled",
-        }
-    browser = settings.get("browser", {})
-    elements = normalize_element_definitions(
-        browser.get("action_elements", {})
-        if isinstance(browser, dict)
-        else {}
-    )
-    selected_db_path = Path(
-        db_path
-        or os.getenv("SELECTOR_PROBE_DB_PATH", "").strip()
-        or PROJECT_ROOT / "data" / "selector-probe.db"
-    )
-    selected_redis_url = (
-        redis_url
-        or str(
-            (
-                settings.get("selector_probe", {}).get("redis", {})
-                if isinstance(settings.get("selector_probe"), dict)
-                else {}
-            ).get("url")
-            or ""
-        ).strip()
-        or os.getenv("CELERY_BROKER_URL", "").strip()
-        or "redis://127.0.0.1:6379/0"
-    )
-    redis_namespace = str(
-        (
-            settings.get("selector_probe", {}).get("redis", {})
-            if isinstance(settings.get("selector_probe"), dict)
-            else {}
-        ).get("namespace")
-        or "selector_registry"
-    )
-    adspower = settings.get("adspower", {})
-    if not isinstance(adspower, dict):
-        raise ValueError("adspower settings must be a JSON object")
-    redis_password = str(
-        (
-            settings.get("selector_probe", {}).get("redis", {})
-            if isinstance(settings.get("selector_probe"), dict)
-            else {}
-        ).get("password")
-        or ""
-    )
-    redis_client = (
-        redis_factory(selected_redis_url, password=redis_password)
-        if redis_factory is _redis_client
-        else redis_factory(selected_redis_url)
-    )
-    try:
-        with store_factory(selected_db_path) as store:
-            registry_kwargs = {
-                "environment": config.environment,
-                "site": config.site,
-            }
-            if registry_factory is _registry_factory:
-                registry_kwargs["namespace"] = redis_namespace
-            registry = registry_factory(redis_client, **registry_kwargs)
-            owner = uuid.uuid4().hex
-            lease = lease_factory(
-                redis_client,
-                (
-                    f"{redis_namespace}:{config.environment}:"
-                    f"{config.site}:lease"
-                ),
-                owner,
-                ttl_seconds=LEASE_TTL_SECONDS,
-                heartbeat_seconds=LEASE_HEARTBEAT_SECONDS,
-            )
-            if lease.acquire() is not True:
-                return {
-                    "status": "lease_busy",
-                    "failure_code": "lease_busy",
-                }
-            heartbeat = _LeaseHeartbeat(lease)
-            heartbeat.start()
-            try:
-                claim_guard = getattr(
-                    store,
-                    "guard_element_request_claim",
-                    None,
-                )
-                if not callable(claim_guard):
-                    raise RuntimeError(
-                        "element request claim guard is unavailable"
-                    )
-
-                def critical_guard(*, renew: bool = False) -> None:
-                    if renew and request_type == "validate":
-                        fresh_settings = settings_loader()
-                        if not isinstance(fresh_settings, dict):
-                            raise ValueError(
-                                "settings loader must return a JSON object"
-                            )
-                        fresh_config = normalize_probe_config(
-                            fresh_settings.get("selector_probe")
-                        )
-                        if fresh_config.enabled is not True:
-                            raise ElementRequestProbeDisabled()
-                        if fresh_config.observe_only:
-                            raise ElementRequestRolloutDisabled()
-                    guarded = claim_guard(
-                        request_id,
-                        claim_token,
-                        claim_generation,
-                        renew=renew,
-                        lease_seconds=ELEMENT_REQUEST_CLAIM_RENEW_SECONDS,
-                    )
-                    if guarded is not True:
-                        raise ElementRequestClaimLost()
-                    heartbeat.require_owned(renew=renew)
-
-                critical_guard(renew=True)
-                runtime = healing_runtime_factory(
-                    config=config,
-                    settings=settings,
-                    store=store,
-                    registry=registry,
-                    adspower_client=adspower_factory(
-                        base_url=adspower.get("base_url"),
-                        api_key=adspower.get("api_key"),
-                        timeout=5.0,
-                        max_retries=1,
-                    ),
-                    elements=elements,
-                    stop_event=None,
-                    lease_guard=critical_guard,
-                    element_request_id=(
-                        request_id if request_type == "validate" else ""
-                    ),
-                    element_request_claim_token=(
-                        claim_token if request_type == "validate" else ""
-                    ),
-                    element_request_generation=(
-                        claim_generation if request_type == "validate" else 0
-                    ),
-                    contracts_override={element_id: dict(contract)},
-                )
-                with runtime as opened_runtime:
-                    result = (
-                        run_element_probe(opened_runtime)
-                        if request_type == "probe"
-                        else run_healing_probe(
-                            opened_runtime,
-                            force_requested_candidate=True,
-                            initial_failed_aliases=(element_id,),
-                        )
-                    )
-                if not isinstance(result, dict):
-                    raise RuntimeError("element request result is invalid")
-                if (
-                    request_type == "validate"
-                    and result.get("status") == "published"
-                    and isinstance(result.get("new_version"), str)
-                ):
-                    if not store.element_request_publication_is_complete(
-                        request_id,
-                        claim_generation,
-                        result["new_version"],
-                    ):
-                        raise ElementRequestClaimLost()
-                else:
-                    critical_guard(renew=True)
-                return result
-            finally:
-                heartbeat.stop()
-                try:
-                    lease.release()
-                except Exception:
-                    pass
-    finally:
-        close = getattr(redis_client, "close", None)
-        if callable(close):
-            close()
-
-
 def wake_element_request_worker(
     request_id: str,
     *,
     store_factory: Callable[[Path], object] = SelectorProbeStore,
     db_path: str | Path | None = None,
 ) -> dict[str, object]:
+    """Reject removed element-request workflow explicitly."""
+
+    del store_factory, db_path
     if (
         not isinstance(request_id, str)
         or not request_id
@@ -995,99 +557,8 @@ def wake_element_request_worker(
         or len(request_id) > 128
     ):
         raise ValueError("request_id is invalid")
+    raise RuntimeError("element request workflow is removed")
 
-    def run() -> None:
-        try:
-            consume_element_requests(
-                store_factory=store_factory,
-                executor=lambda request: run_element_request_runtime(
-                    request,
-                    store_factory=store_factory,
-                    db_path=db_path,
-                ),
-                db_path=db_path,
-                max_requests=10,
-            )
-        except BaseException:
-            LOGGER.warning("element_request_wakeup_failed")
-
-    thread = threading.Thread(
-        target=run,
-        name=f"selector-element-request-{request_id[:12]}",
-        daemon=True,
-    )
-    thread.start()
-    return {"status": "woken", "request_id": request_id}
-
-
-def _settle_disabled_element_publications(
-    *,
-    store_factory: Callable[[Path], object],
-    db_path: Path,
-    redis_factory: Callable[[str], object],
-    registry_factory: Callable[..., object],
-    redis_url: str,
-    environment: str,
-    site: str,
-    error_code: str,
-    now: datetime,
-) -> dict[str, int]:
-    with store_factory(db_path) as store:
-        abort = getattr(
-            store,
-            "abort_disabled_element_publications",
-            None,
-        )
-        if not callable(abort):
-            return {"aborted": 0, "inflight": 0, "indeterminate": 0}
-        outcome = abort(error_code=error_code, now=now)
-    if not outcome["indeterminate"]:
-        return outcome
-    redis_client = redis_factory(redis_url)
-    try:
-        registry = registry_factory(
-            redis_client,
-            environment=environment,
-            site=site,
-        )
-        try:
-            active = registry.get_active()
-        except Exception:
-            return {
-                **outcome,
-                "unresolved": outcome["indeterminate"],
-            }
-        active_version = ""
-        active_bundle_hash = ""
-        if isinstance(active, Mapping):
-            version = active.get("version")
-            bundle_hash = active.get("bundle_hash")
-            if isinstance(version, str):
-                active_version = version
-            if isinstance(bundle_hash, str):
-                active_bundle_hash = bundle_hash
-        with store_factory(db_path) as store:
-            resolve = getattr(
-                store,
-                "resolve_indeterminate_element_publications",
-                None,
-            )
-            if not callable(resolve):
-                return {
-                    **outcome,
-                    "unresolved": outcome["indeterminate"],
-                }
-            resolution = resolve(
-                active_version=active_version,
-                active_bundle_hash=active_bundle_hash,
-                error_code=error_code,
-                now=now,
-            )
-        return {**outcome, **resolution}
-    finally:
-        close = getattr(redis_client, "close", None)
-        if callable(close):
-            close()
 
 
 def run_tick(
@@ -1100,10 +571,9 @@ def run_tick(
         _reconcile_publication
     ),
     adspower_factory: Callable[..., object] = AdsPowerController,
-    probe_runner: Callable[..., dict] = run_observe_probe,
-    healing_runner: Callable[..., dict] = run_healing_probe,
-    healing_runtime_factory: Callable[..., object] = (
-        _healing_runtime_factory
+    managed_runner: Callable[..., dict] = run_managed_probe,
+    managed_runtime_factory: Callable[..., object] = (
+        _managed_runtime_factory
     ),
     lease_factory: Callable[..., object] = RedisLease,
     gate_service_factory: Callable[..., object] = StrategyGateService,
@@ -1126,13 +596,6 @@ def run_tick(
     config = normalize_probe_config(settings.get("selector_probe"))
     if not isinstance(force, bool):
         raise ValueError("force must be a boolean")
-    browser = settings.get("browser", {})
-    elements = (
-        browser.get("action_elements", {})
-        if isinstance(browser, dict)
-        else {}
-    )
-    elements = normalize_element_definitions(elements)
     adspower = settings.get("adspower", {})
     if not isinstance(adspower, dict):
         raise ValueError("adspower settings must be a JSON object")
@@ -1170,30 +633,11 @@ def run_tick(
         or "selector_registry"
     )
     if config.enabled is not True:
-        disabled_outcome: dict[str, int] = {}
         selected_clock = clock or SystemClock()
         clock_now = getattr(selected_clock, "now", None)
         maintenance_now = (
             clock_now() if callable(clock_now) else SystemClock().now()
         )
-        if callable(
-            getattr(
-                store_factory,
-                "abort_disabled_element_publications",
-                None,
-            )
-        ):
-            disabled_outcome = _settle_disabled_element_publications(
-                store_factory=store_factory,
-                db_path=selected_db_path,
-                redis_factory=redis_factory,
-                registry_factory=registry_factory,
-                redis_url=selected_redis_url,
-                environment=config.environment,
-                site=config.site,
-                error_code="probe_disabled",
-                now=maintenance_now,
-            )
         with store_factory(selected_db_path) as store:
             _run_maintenance(
                 store=store,
@@ -1206,57 +650,7 @@ def run_tick(
         return {
             "status": "disabled",
             "observe_only": config.observe_only,
-            **disabled_outcome,
         }
-    if config.observe_only and callable(
-        getattr(
-            store_factory,
-            "abort_disabled_element_publications",
-            None,
-        )
-    ):
-        with store_factory(selected_db_path) as store:
-            selected_clock = clock or SystemClock()
-            clock_now = getattr(selected_clock, "now", None)
-            preflight_now = (
-                clock_now() if callable(clock_now) else SystemClock().now()
-            )
-            if not isinstance(preflight_now, datetime):
-                raise ValueError("clock.now() must return a datetime")
-            abort = getattr(
-                store,
-                "abort_disabled_element_publications",
-                None,
-            )
-            outcome = (
-                _settle_disabled_element_publications(
-                    store_factory=store_factory,
-                    db_path=selected_db_path,
-                    redis_factory=redis_factory,
-                    registry_factory=registry_factory,
-                    redis_url=selected_redis_url,
-                    environment=config.environment,
-                    site=config.site,
-                    error_code="rollout_disabled",
-                    now=preflight_now,
-                )
-                if callable(abort)
-                else {
-                    "aborted": 0,
-                    "inflight": 0,
-                    "indeterminate": 0,
-                }
-            )
-        if (
-            outcome["aborted"]
-            or outcome["inflight"]
-            or outcome["indeterminate"]
-        ):
-            return {
-                "status": "rollout_disabled",
-                "observe_only": True,
-                **outcome,
-            }
     redis_password = str(
         (
             settings.get("selector_probe", {}).get("redis", {})
@@ -1272,9 +666,6 @@ def run_tick(
     )
     try:
         with store_factory(selected_db_path) as store:
-            seeder = getattr(store, "seed_legacy_elements", None)
-            if callable(seeder):
-                seeder(elements, default_tiktok_contracts())
             selected_clock = clock or SystemClock()
             maintenance_clock = getattr(selected_clock, "now", None)
             maintenance_now = (
@@ -1292,24 +683,6 @@ def run_tick(
                 webhook_dispatcher_factory=webhook_dispatcher_factory,
                 evidence_root=selected_evidence_root,
             )
-            if config.observe_only:
-                adspower_client = adspower_factory(
-                    base_url=adspower.get("base_url"),
-                    api_key=adspower.get("api_key"),
-                    timeout=5.0,
-                    max_retries=1,
-                )
-                return probe_runner(
-                    config=config,
-                    store=store,
-                    redis_client=redis_client,
-                    adspower_client=adspower_client,
-                    clock=selected_clock,
-                    elements=elements,
-                    stop_event=stop_event,
-                    force=force,
-                    management_request_id=management_request_id,
-                )
             attempt_token = owner_id_factory()
             lease = lease_factory(
                 redis_client,
@@ -1322,10 +695,46 @@ def run_tick(
                 heartbeat_seconds=LEASE_HEARTBEAT_SECONDS,
             )
             if lease.acquire() is not True:
-                return {"status": "lease_busy", "observe_only": False}
+                return {
+                    "status": "lease_busy",
+                    "observe_only": config.observe_only,
+                }
             heartbeat = _LeaseHeartbeat(lease)
             heartbeat.start()
             run_id: int | None = None
+            stage_map: dict[
+                tuple[str, str, object], dict[str, object]
+            ] = {}
+            diagnostic_map: dict[
+                tuple[str, str, object], dict[str, object]
+            ] = {}
+
+            def record_progress(event: Mapping[str, object]) -> None:
+                sanitized = _sanitize_progress_event(event)
+                key = (
+                    str(sanitized["name"]),
+                    str(sanitized["profile_mask"]),
+                    sanitized.get("round"),
+                )
+                target = (
+                    stage_map
+                    if sanitized["name"] in BUSINESS_STAGES
+                    else diagnostic_map
+                )
+                target[key] = sanitized
+                while len(target) > 30:
+                    target.pop(next(iter(target)))
+                updater = getattr(store, "update_run_progress", None)
+                if callable(updater) and run_id is not None:
+                    try:
+                        updater(
+                            run_id,
+                            attempt_token=attempt_token,
+                            stages=list(stage_map.values()),
+                        )
+                    except Exception:
+                        pass
+
             try:
                 registry_kwargs = {
                     "environment": config.environment,
@@ -1354,18 +763,26 @@ def run_tick(
                     site=config.site,
                     environment=config.environment,
                 )
-                reconcile_runner(store, registry)
+                if not config.observe_only:
+                    reconcile_runner(store, registry)
                 now = selected_clock.now()
                 if not isinstance(now, datetime):
                     raise ValueError("clock.now() must return a datetime")
-                slot = due_daily_slot(
-                    now,
-                    _last_terminal_slot(store),
-                    config.timezone,
-                    config.daily_time,
+                slot = (
+                    now
+                    if force
+                    else due_daily_slot(
+                        now,
+                        _last_terminal_slot(store),
+                        config.timezone,
+                        config.daily_time,
+                    )
                 )
                 if slot is None and not force:
-                    return {"status": "not_due", "observe_only": False}
+                    return {
+                        "status": "not_due",
+                        "observe_only": config.observe_only,
+                    }
                 health = _health_state(
                     store,
                     site=config.site,
@@ -1384,7 +801,7 @@ def run_tick(
                     ):
                         return {
                             "status": "retry_wait",
-                            "observe_only": False,
+                            "observe_only": config.observe_only,
                             "retry_at": retry_at.isoformat(),
                         }
                 try:
@@ -1404,51 +821,181 @@ def run_tick(
                     management_request_id=management_request_id,
                     trigger="manual" if management_request_id else "scheduled",
                 )
+                for business_stage in BUSINESS_STAGES:
+                    record_progress(
+                        {
+                            "name": business_stage,
+                            "status": (
+                                "running"
+                                if business_stage == "prepare_environment"
+                                else "queued"
+                            ),
+                            "attempt_count": 1,
+                        }
+                    )
+                candidate_runtime = ManagedElementRuntime(store)
+                try:
+                    candidate = candidate_runtime.load_candidate()
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    result = {
+                        "status": "infrastructure_unavailable",
+                        "failure_code": "candidate_unavailable",
+                        "published": False,
+                        "new_version": None,
+                        "proposed_pause_aliases": [],
+                    }
+                else:
+                    raw_elements = candidate.get("elements")
+                    if not raw_elements:
+                        result = managed_runner(
+                            candidate_runtime,
+                            publish=not config.observe_only,
+                            candidate=candidate,
+                        )
+                    else:
+                        result = None
                 adspower_client = adspower_factory(
                     base_url=adspower.get("base_url"),
                     api_key=adspower.get("api_key"),
                     timeout=5.0,
                     max_retries=1,
-                )
-                runtime = healing_runtime_factory(
-                    config=config,
-                    settings=settings,
-                    store=store,
-                    registry=registry,
-                    adspower_client=adspower_client,
-                    elements=elements,
-                    stop_event=stop_event,
-                    lease_guard=heartbeat.require_owned,
-                    probe_run_id=run_id,
-                    attempt_token=attempt_token,
-                )
-                with runtime as opened_runtime:
-                    result = healing_runner(opened_runtime)
-                    if not isinstance(result, dict):
-                        raise RuntimeError("healing result must be an object")
-                    if result.get("status") == "selector_validation_failed":
-                        failed_aliases = tuple(
-                            sorted(
-                                {
-                                    alias
-                                    for alias in result.get(
-                                        "proposed_pause_aliases",
-                                        (),
-                                    )
-                                    if isinstance(alias, str) and alias
-                                }
+                ) if result is None else None
+                if result is None:
+                    runtime_kwargs = {
+                        "config": config,
+                        "settings": settings,
+                        "store": store,
+                        "registry": registry,
+                        "adspower_client": adspower_client,
+                        "stop_event": stop_event,
+                        "lease_guard": heartbeat.require_owned,
+                        "probe_run_id": run_id,
+                        "attempt_token": attempt_token,
+                        "progress_sink": record_progress,
+                        "reconciler": reconcile_runner,
+                        "page_ready_timeout_seconds": (
+                            config.page_timeout_seconds
+                        ),
+                    }
+                    runtime = managed_runtime_factory(**runtime_kwargs)
+                    if isinstance(raw_elements, Mapping) and raw_elements:
+                        with runtime as opened_runtime:
+                            result = managed_runner(
+                                opened_runtime,
+                                publish=not config.observe_only,
+                                candidate=candidate,
                             )
+                            if not isinstance(result, dict):
+                                raise RuntimeError(
+                                    "managed probe result must be an object"
+                                )
+                            if result.get("status") == "selector_validation_failed":
+                                failed_aliases = tuple(
+                                    sorted(
+                                        {
+                                            alias
+                                            for alias in result.get(
+                                                "proposed_pause_aliases",
+                                                (),
+                                            )
+                                            if isinstance(alias, str) and alias
+                                        }
+                                    )
+                                )
+                                screenshot_path = _capture_terminal_screenshot(
+                                    opened_runtime,
+                                    failed_aliases=failed_aliases,
+                                    evidence_root=selected_evidence_root,
+                                    run_id=run_id,
+                                )
+                                if screenshot_path:
+                                    result["screenshot_path"] = screenshot_path
+                if not isinstance(result, dict):
+                    raise RuntimeError("managed probe result must be an object")
+                if (
+                    result.get("status") == "published"
+                    and isinstance(result.get("new_version"), str)
+                    and result["new_version"]
+                ):
+                    stored_version = store.get_version(
+                        result["new_version"]
+                    )
+                    if (
+                        isinstance(stored_version, Mapping)
+                        and isinstance(
+                            stored_version.get("evidence"), Mapping
                         )
-                        screenshot_path = _capture_terminal_screenshot(
-                            opened_runtime,
-                            failed_aliases=failed_aliases,
-                            evidence_root=selected_evidence_root,
-                            run_id=run_id,
+                    ):
+                        result["validation_evidence"] = dict(
+                            stored_version["evidence"]
                         )
-                        if screenshot_path:
-                            result["screenshot_path"] = screenshot_path
+                result_status = str(
+                    result.get("status") or "probe_unavailable"
+                )
+                if result_status in {"healthy", "published"}:
+                    for business_stage in BUSINESS_STAGES:
+                        record_progress(
+                            {
+                                "name": business_stage,
+                                "status": "passed",
+                                "attempt_count": 1,
+                            }
+                        )
+                elif result_status == "selector_validation_failed":
+                    for business_stage, business_status in (
+                        ("prepare_environment", "passed"),
+                        ("open_and_replay", "passed"),
+                        ("validate_elements", "failed"),
+                        ("protect_or_recover", "passed"),
+                        ("alert_and_cleanup", "passed"),
+                    ):
+                        record_progress(
+                            {
+                                "name": business_stage,
+                                "status": business_status,
+                                "attempt_count": result.get(
+                                    "attempt_count", 1
+                                ),
+                                "failure_code": (
+                                    str(result.get("failure_code") or "")
+                                    if business_status == "failed"
+                                    else ""
+                                ),
+                            }
+                        )
+                elif result_status == "publication_failed":
+                    for business_stage, business_status in (
+                        ("prepare_environment", "passed"),
+                        ("open_and_replay", "passed"),
+                        ("validate_elements", "passed"),
+                        ("protect_or_recover", "failed"),
+                        ("alert_and_cleanup", "passed"),
+                    ):
+                        record_progress(
+                            {
+                                "name": business_stage,
+                                "status": business_status,
+                                "attempt_count": 1,
+                                "failure_code": (
+                                    str(result.get("failure_code") or "")
+                                    if business_status == "failed"
+                                    else ""
+                                ),
+                            }
+                        )
+                elif result_status == "awaiting_element_selection":
+                    for business_stage in BUSINESS_STAGES:
+                        record_progress(
+                            {
+                                "name": business_stage,
+                                "status": "skipped",
+                                "attempt_count": 1,
+                            }
+                        )
                 heartbeat.require_owned(renew=True)
-                status = str(result.get("status") or "probe_unavailable")
+                status = result_status
                 recovery: tuple[
                     dict[str, object],
                     tuple[str, ...],
@@ -1456,7 +1003,8 @@ def run_tick(
                 ] | None = None
                 recovery_pending = getattr(store, "recovery_pending", None)
                 if (
-                    status in {"healthy", "published"}
+                    not config.observe_only
+                    and status in {"healthy", "published"}
                     and callable(recovery_pending)
                     and recovery_pending(
                         site=config.site,
@@ -1493,6 +1041,7 @@ def run_tick(
                     "healthy",
                     "published",
                     "selector_validation_failed",
+                    "awaiting_element_selection",
                 }
                 next_retry_count = retry_count + 1 if infrastructure else 0
                 policy_outcome = (
@@ -1501,7 +1050,11 @@ def run_tick(
                     else (
                         "validated"
                         if status in {"healthy", "published"}
-                        else "infrastructure"
+                        else (
+                            "infrastructure"
+                            if status != "awaiting_element_selection"
+                            else None
+                        )
                     )
                 )
                 failed_aliases = tuple(
@@ -1517,7 +1070,11 @@ def run_tick(
                     )
                 )
                 effect: dict[str, object] | None = None
-                if status == "selector_validation_failed" and failed_aliases:
+                if (
+                    not config.observe_only
+                    and status == "selector_validation_failed"
+                    and failed_aliases
+                ):
                     effect = {
                         "key": (
                             f"probe-run:{run_id}:attempt:{attempt_token}:"
@@ -1533,17 +1090,13 @@ def run_tick(
                                 result.get("failure_code")
                                 or "selector_validation_failed"
                             ),
-                            "match_count": result.get("match_count"),
-                            "required_state": str(
-                                result.get("required_state") or ""
-                            ),
                             "screenshot_path": str(
                                 result.get("screenshot_path") or ""
                             ),
                             "occurred_at": now.astimezone(UTC).isoformat(),
                         },
                     }
-                elif infrastructure:
+                elif infrastructure and not config.observe_only:
                     failure_started = _failure_started_at(health, now)
                     elapsed = (
                         now.astimezone(UTC) - failure_started
@@ -1598,13 +1151,13 @@ def run_tick(
                         else status
                     ),
                     details={
-                        "observe_only": False,
+                        "observe_only": config.observe_only,
                         "status": status,
                         "published": result.get("published") is True,
                         "failure_code": result.get("failure_code", ""),
-                        "match_count": result.get("match_count"),
-                        "required_state": result.get("required_state", ""),
                         "validation_records": validation_records,
+                        "stages": list(stage_map.values()),
+                        "diagnostics": list(diagnostic_map.values()),
                         **(
                             {
                                 "retry_count": next_retry_count,
@@ -1627,10 +1180,14 @@ def run_tick(
                         (),
                     ),
                     attempt_token=attempt_token,
-                    policy=_probe_policy(
-                        config,
-                        outcome=policy_outcome,
-                        now=now,
+                    policy=(
+                        _probe_policy(
+                            config,
+                            outcome=policy_outcome,
+                            now=now,
+                        )
+                        if policy_outcome is not None
+                        else None
                     ),
                     effect=effect,
                 )
@@ -1655,9 +1212,22 @@ def run_tick(
                 )
                 if paused:
                     result["paused_strategies"] = paused
+                result["observe_only"] = config.observe_only
                 return result
             except BaseException as error:
                 if run_id is not None:
+                    prepare_stage = stage_map.get(
+                        ("prepare_environment", "", None), {}
+                    )
+                    if prepare_stage.get("status") != "passed":
+                        record_progress(
+                            {
+                                "name": "prepare_environment",
+                                "status": "failed",
+                                "attempt_count": 1,
+                                "failure_code": _error_code(error),
+                            }
+                        )
                     next_retry_count = retry_count + 1
                     failure_now = selected_clock.now()
                     failure_started = _failure_started_at(health, failure_now)
@@ -1669,34 +1239,42 @@ def run_tick(
                         if elapsed >= PROBE_STALE_SECONDS
                         else "probe_unavailable"
                     )
-                    effect = {
-                        "key": (
-                            f"probe-run:{run_id}:attempt:{attempt_token}:"
-                            f"{event_type.replace('_', '-')}"
-                        ),
-                        "type": event_type,
-                        "payload": {
-                            "site": config.site,
-                            "environment": config.environment,
-                            "active_version": active_version,
-                            "failure_started_at": failure_started.isoformat(),
-                            "failure_code": _error_code(error),
-                            "occurred_at": failure_now.astimezone(
-                                UTC
-                            ).isoformat(),
-                        },
-                    }
+                    effect = None
+                    if not config.observe_only:
+                        effect = {
+                            "key": (
+                                f"probe-run:{run_id}:attempt:{attempt_token}:"
+                                f"{event_type.replace('_', '-')}"
+                            ),
+                            "type": event_type,
+                            "payload": {
+                                "site": config.site,
+                                "environment": config.environment,
+                                "active_version": active_version,
+                                "failure_started_at": (
+                                    failure_started.isoformat()
+                                ),
+                                "failure_code": _error_code(error),
+                                "occurred_at": failure_now.astimezone(
+                                    UTC
+                                ).isoformat(),
+                            },
+                        }
                     store.finish_run(
                         run_id,
                         status="probe_unavailable",
                         details={
-                            "observe_only": False,
+                            "observe_only": config.observe_only,
                             "failure_code": _error_code(error),
                             "retry_count": next_retry_count,
                             "retry_at": _retry_at(
                                 selected_clock.now(),
                                 next_retry_count,
                             ).isoformat(),
+                            "stages": list(stage_map.values()),
+                            "diagnostics": list(
+                                diagnostic_map.values()
+                            ),
                         },
                         attempt_token=attempt_token,
                         policy=_probe_policy(
@@ -1773,8 +1351,6 @@ def serve(
     try:
         while not _stopped(event, selected_stop_file):
             try:
-                if tick_runner is run_tick:
-                    consume_element_requests()
                 tick_runner(
                     settings_loader=settings_loader,
                     stop_event=event,

@@ -1,50 +1,53 @@
 import re
 
 
-def test_control_page_exposes_exact_selector_probe_tab_shell(admin_client):
+def test_control_page_exposes_exact_selector_probe_menu_shell(admin_client):
     html = admin_client.get("/").get_data(as_text=True)
 
     assert html.count('role="tablist"') == 1
-    assert html.count('role="tab"') == 7
-    assert html.count('role="tabpanel"') == 7
+    assert html.count('role="tab"') == 4
+    assert html.count('role="tabpanel"') == 4
     assert re.findall(r'data-selector-probe-tab="([^"]+)"', html) == [
-        "overview",
-        "elements",
-        "gates",
-        "runs",
-        "versions",
-        "alerts",
+        "collect",
+        "managed",
+        "operations",
         "settings",
     ]
-    for label in ("总览", "元素", "策略闸门", "探针运行", "版本", "告警", "设置"):
+    for label in ("采集元素", "已选元素", "运行与告警", "系统设置"):
         assert f">{label}</button>" in html
     for tab_id in (
-        "overview",
-        "elements",
-        "gates",
-        "runs",
-        "versions",
-        "alerts",
+        "collect",
+        "managed",
+        "operations",
         "settings",
     ):
         assert f'aria-controls="selector-probe-panel-{tab_id}"' in html
         assert f'id="selector-probe-panel-{tab_id}"' in html
     assert html.count('aria-selected="true"') == 1
-    assert html.count('data-selector-probe-panel="overview"') == 1
+    assert html.count('data-selector-probe-panel="collect"') == 1
+    assert not re.search(
+        r"selector-probe-tab-(overview|elements|gates|runs|versions|alerts)",
+        html,
+    )
     assert 'aria-live="polite"' in html
 
 
 def test_control_page_loads_probe_assets_before_browser_controller(admin_client):
     html = admin_client.get("/").get_data(as_text=True)
+    inventory_script = admin_client.client.get(
+        "/static/selector_inventory_ui.js"
+    )
     script = admin_client.client.get("/static/selector_probe_ui.js")
     stylesheet = admin_client.client.get("/static/selector_probe.css")
     dashboard_stylesheet = admin_client.client.get("/static/dashboard_shell.css")
 
     try:
+        assert inventory_script.status_code == 200
         assert script.status_code == 200
         assert stylesheet.status_code == 200
         assert dashboard_stylesheet.status_code == 200
-        assert html.index("management_fetch.js") < html.index("selector_probe_ui.js")
+        assert html.index("management_fetch.js") < html.index("selector_inventory_ui.js")
+        assert html.index("selector_inventory_ui.js") < html.index("selector_probe_ui.js")
         assert html.index("selector_probe_ui.js") < html.index("browser_strategy_ui.js")
         assert html.index("dashboard_shell.css") < html.index("selector_probe.css")
         assert html.count("selector_probe.css") == 1
@@ -59,26 +62,21 @@ def test_control_page_loads_probe_assets_before_browser_controller(admin_client)
         ):
             assert marker in html
         for marker in (
-            'id="selector-overview-summaries"',
-            'id="selector-overview-priority"',
-            'id="selector-overview-events"',
-            'id="selector-element-add"',
+            'id="selector-element-picker"',
+            'id="selector-inventory-list"',
+            'id="selector-inventory-search"',
             'id="selector-element-filters"',
             'id="selector-element-counts"',
-            'id="selector-element-rows"',
+            'id="selector-managed-elements"',
             'id="selector-element-page-size"',
-            'id="selector-element-wizard"',
-            'id="selector-element-detail"',
-            'id="selector-element-validation-matrix"',
-            'id="selector-element-detail-evidence"',
-            'id="selector-element-detail-candidates"',
-            'id="selector-element-detail-repairs"',
-            'id="selector-element-detail-history"',
-            'id="selector-element-migration-dialog"',
             'id="selector-gate-counts"',
             'id="selector-gate-rows"',
             'id="selector-run-now"',
             'id="selector-run-rows"',
+            'id="selector-run-current-steps"',
+            'id="selector-run-stage-detail"',
+            'id="selector-run-technical-details"',
+            'id="selector-run-technical-lines"',
             'id="selector-version-rows"',
             'id="selector-alert-counts"',
             'id="selector-alert-rows"',
@@ -87,12 +85,10 @@ def test_control_page_loads_probe_assets_before_browser_controller(admin_client)
             'id="selector-settings-form"',
             'id="selector-settings-basic"',
             'id="selector-settings-profiles"',
-            'id="selector-settings-model"',
             'id="selector-settings-redis"',
             'id="selector-settings-webhook"',
             'id="selector-settings-permissions"',
             'id="selector-account-rows"',
-            'id="selector-temporary-password-dialog"',
         ):
             assert marker in html
         assert '<option value="20">20</option>' in html
@@ -100,23 +96,16 @@ def test_control_page_loads_probe_assets_before_browser_controller(admin_client)
         assert '<option value="100">100</option>' in html
         assert '<option value="yes">已引用</option>' in html
         assert '<option value="no">未引用</option>' in html
-        assert 'placeholder="名称、ID 或策略"' in html
-        assert "Role、稳定属性" not in html
-        wizard = html[
-            html.index('id="selector-element-wizard"'):
-            html.index('id="selector-element-migration-dialog"')
-        ]
-        assert 'name="javascript"' not in wizard
-        assert 'name="xpath"' not in wizard
-        assert 'id="selector-element-advanced-locators"' not in wizard
-        assert "Locator 候选由探针生成并以只读方式展示" in wizard
-        assert "保留当前 Locator" in html
-        assert "策略依赖保持不变" in html
-        assert "不会自动开启强制执行" in html
-        assert "确认告警只记录归属，不清除策略闸门" in html
+        assert 'placeholder="自定义名称或元素 ID"' in html
+        assert "Role/Name 仅帮助阅读，不参与路径匹配" in html
+        assert "人工暂停/恢复不会被探针自动覆盖" in html
         assert "留空保持不变" in html
-        assert "独立清除 API Key" in html
-        assert "仅显示一次" in html
+        probe_console = html[
+            html.index('id="panel-strategies"'):
+            html.index('<script src="/static/selector_inventory_ui.js"')
+        ]
+        assert "API Key" not in probe_console
+        assert "LLM" not in probe_console
         assert "激活此版本" not in html
         assert "继续部分" not in html
         probe_script = script.get_data(as_text=True)
@@ -130,9 +119,15 @@ def test_control_page_loads_probe_assets_before_browser_controller(admin_client)
         assert ".selector-summary-grid" in css
         assert ".selector-element-filters" in css
         assert ".selector-operation-row" in css
+        assert ".selector-run-stage-card" in css
+        assert ".selector-run-stage-status.is-failed" in css
+        assert ".selector-run-technical-details" in css
+        assert ".selector-console-nav" in css
+        assert ".selector-inventory-grid" in css
         assert "grid-template-columns: repeat(5, minmax(0, 1fr))" in css
         assert "selector_probe.css" not in dashboard_css
     finally:
+        inventory_script.close()
         script.close()
         stylesheet.close()
         dashboard_stylesheet.close()

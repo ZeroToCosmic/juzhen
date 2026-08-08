@@ -7,10 +7,7 @@ from types import SimpleNamespace
 
 from flask import Flask, g, request
 
-from selector_probe.blueprint import (
-    create_selector_probe_blueprint,
-    default_settings_preflight_runner,
-)
+from selector_probe.blueprint import create_selector_probe_blueprint
 from selector_probe.gates import StrategyGateService
 from selector_probe.store import SelectorProbeStore
 from gateway.auth_blueprint import install_management_guard
@@ -23,7 +20,6 @@ def _app(
     settings_mutator=None,
     evidence_root=None,
     run_dispatcher=None,
-    settings_preflight_runner=None,
     store_factory=None,
 ) -> Flask:
     class Registry:
@@ -56,18 +52,6 @@ def _app(
             or (lambda: {"selector_probe": {}}),
             settings_mutator=settings_mutator
             or (lambda mutator: mutator({"selector_probe": {}})),
-            settings_preflight_runner=(
-                settings_preflight_runner
-                or (
-                    lambda _raw, _candidate: {
-                        "profiles": "passed",
-                        "redis_aof": "passed",
-                        "redis_eviction": "passed",
-                        "model": "passed",
-                        "webhook": "passed",
-                    }
-                )
-            ),
             evidence_root=evidence_root or database.parent / "evidence",
             run_dispatcher=run_dispatcher
             or (
@@ -216,18 +200,6 @@ def test_manual_resume_preserves_probe_gate_reason(tmp_path):
 def test_settings_token_and_opaque_refs_handle_tail_collision(tmp_path):
     database = tmp_path / "probe.db"
     settings = {
-        "models": {
-            "default_model_id": "repair-model",
-            "items": [
-                {
-                    "id": "repair-model",
-                    "provider": "openai",
-                    "mode": "repair_only",
-                    "enabled": True,
-                    "api_key": "secret",
-                }
-            ],
-        },
         "selector_probe": {
             "enabled": True,
             "site": "tiktok",
@@ -240,7 +212,6 @@ def test_settings_token_and_opaque_refs_handle_tail_collision(tmp_path):
                 "alpha-SAME",
                 "beta-SAME",
             ],
-            "model_id": "repair-model",
             "rollout_mode": "publish",
             "observe_only": False,
             "redis": {
@@ -282,77 +253,33 @@ def test_settings_token_and_opaque_refs_handle_tail_collision(tmp_path):
     )
     candidate = copy.deepcopy(current)
     candidate["rollout_mode"] = "enforce"
-    preflight = client.post(
-        "/api/selector-probe/settings/preflight",
-        json={
-            "expected_revision": 0,
-            "candidate_fingerprint": "fnv1a-deadbeef",
-            "settings": candidate,
-        },
-    )
-    assert preflight.status_code == 200
-    assert preflight.get_json()["status"] == "passed"
-    assert (
-        preflight.get_json()["candidate_fingerprint"]
-        == "fnv1a-deadbeef"
-    )
-
-    missing = client.patch(
-        "/api/selector-probe/settings",
-        json={
-            "expected_revision": 0,
-            "reason": "enable enforcement",
-            "idempotency_key": "settings-missing-token",
-            "settings": candidate,
-        },
-    )
-    wrong_actor = client.patch(
-        "/api/selector-probe/settings",
-        json={
-            "expected_revision": 0,
-            "reason": "enable enforcement",
-            "idempotency_key": "settings-wrong-actor",
-            "preflight_token": preflight.get_json()["preflight_token"],
-            "candidate_fingerprint": "fnv1a-deadbeef",
-            "preflight_checked_at": preflight.get_json()["checked_at"],
-            "settings": candidate,
-        },
-        headers={"X-Test-Actor": "8"},
-    )
     saved = client.patch(
         "/api/selector-probe/settings",
         json={
             "expected_revision": 0,
             "reason": "enable enforcement",
             "idempotency_key": "settings-save-1",
-            "preflight_token": preflight.get_json()["preflight_token"],
-            "candidate_fingerprint": "fnv1a-deadbeef",
-            "preflight_checked_at": preflight.get_json()["checked_at"],
             "settings": candidate,
         },
     )
 
-    assert missing.status_code == 409
-    assert missing.get_json()["code"] == "preflight_required"
-    assert wrong_actor.status_code == 409
-    assert wrong_actor.get_json()["code"] == "invalid_preflight_token"
     assert saved.status_code == 200
     assert saved.get_json()["rollout_mode"] == "enforce"
     assert settings["selector_probe"]["test_profile_ids"] == [
         "alpha-SAME",
         "beta-SAME",
     ]
-    private_value = "super-private-model-key-8291"
+    private_value = "super-private-redis-key-8291"
     secret_candidate = copy.deepcopy(saved.get_json())
     secret_candidate["rollout_mode"] = "publish"
     secret_update = client.patch(
         "/api/selector-probe/settings",
         json={
             "expected_revision": 1,
-            "reason": "rotate model credential",
+            "reason": "rotate Redis credential",
             "idempotency_key": "settings-secret-no-db",
             "settings": secret_candidate,
-            "secrets": {"model_api_key": private_value},
+            "secrets": {"redis_password": private_value},
         },
     )
     assert secret_update.status_code == 200
@@ -367,20 +294,7 @@ def _durable_settings_state():
             "environment": "production",
             "rollout_mode": "observe",
             "observe_only": True,
-            "model_id": "model-main",
             "webhook": {"enabled": False},
-        },
-        "models": {
-            "default_model_id": "model-main",
-            "items": [
-                {
-                    "id": "model-main",
-                    "provider": "test",
-                    "mode": "chat",
-                    "enabled": True,
-                    "api_key": "",
-                }
-            ],
         },
         "adspower": {},
     }
@@ -392,10 +306,10 @@ def _secret_settings_update(client, *, key, secret):
     ).get_json()
     return {
         "expected_revision": candidate["revision"],
-        "reason": "rotate model credential",
+        "reason": "rotate Redis credential",
         "idempotency_key": key,
         "settings": candidate,
-        "secrets": {"model_api_key": secret},
+        "secrets": {"redis_password": secret},
     }
 
 
@@ -505,16 +419,10 @@ def test_settings_ack_failure_reconciles_after_restart_without_secret(
         settings_provider=provider,
         settings_mutator=mutator,
     ).test_client()
-    stale = restarted.post(
-        "/api/selector-probe/settings/preflight",
-        json={"expected_revision": 0, "settings": body["settings"]},
-    )
     replay = restarted.patch(
         "/api/selector-probe/settings", json=body
     )
 
-    assert stale.status_code == 409
-    assert stale.get_json()["code"] == "stale_revision"
     assert replay.status_code == 200
     assert replay.get_json()["revision"] == 1
     with SelectorProbeStore(database) as store:
@@ -720,128 +628,6 @@ def test_management_rbac_metadata_matches_mutation_policy(tmp_path):
         assert views[
             f"selector_probe.{endpoint}"
         ].management_roles == {"administrator"}
-
-
-def test_default_preflight_fails_closed_when_services_are_unreachable(
-    monkeypatch,
-):
-    import requests
-    from redis import Redis
-
-    def unavailable(*_args, **_kwargs):
-        raise RuntimeError("unavailable")
-
-    monkeypatch.setattr(requests, "get", unavailable)
-    monkeypatch.setattr(Redis, "from_url", unavailable)
-    raw = {
-        "adspower": {"base_url": "http://127.0.0.1:1"},
-        "models": {
-            "items": [
-                {
-                    "id": "repair",
-                    "enabled": True,
-                    "base_url": "http://127.0.0.1:1",
-                    "api_key": "configured",
-                }
-            ]
-        },
-        "selector_probe": {
-            "test_profile_ids": ["profile-a", "profile-b"],
-            "model_id": "repair",
-            "redis": {
-                "aof_enabled": True,
-                "eviction_policy": "noeviction",
-            },
-            "webhook": {"enabled": False},
-        },
-    }
-
-    checks = default_settings_preflight_runner(
-        raw, {"site": "tiktok", "environment": "production"}
-    )
-
-    assert checks == {
-        "profiles": "failed",
-        "redis_aof": "failed",
-        "redis_eviction": "failed",
-        "model": "failed",
-        "webhook": "failed",
-    }
-
-
-def test_default_preflight_uses_redis_password_and_closes_partial_profile(
-    monkeypatch,
-):
-    import adspower
-    from redis import Redis
-
-    stopped = []
-    redis_calls = []
-
-    class Controller:
-        def __init__(self, **_kwargs):
-            pass
-
-        def start_browser(self, profile_id):
-            raise RuntimeError(f"partial launch: {profile_id}")
-
-        def stop_browser(self, profile_id):
-            stopped.append(profile_id)
-
-    class RedisClient:
-        def ping(self):
-            return True
-
-        def info(self, _section):
-            return {"aof_enabled": 1}
-
-        def config_get(self, _name):
-            return {"maxmemory-policy": "noeviction"}
-
-        def close(self):
-            pass
-
-    def from_url(url, **kwargs):
-        redis_calls.append((url, kwargs))
-        return RedisClient()
-
-    monkeypatch.setattr(adspower, "AdsPowerController", Controller)
-    monkeypatch.setattr(Redis, "from_url", from_url)
-    checks = default_settings_preflight_runner(
-        {
-            "adspower": {},
-            "models": {"items": []},
-            "selector_probe": {
-                "test_profile_ids": ["profile-a", "profile-b"],
-                "dedicated_test_profile_ids": [
-                    "profile-a",
-                    "profile-b",
-                ],
-                "model_id": "missing",
-                "redis": {
-                    "url": "redis://probe-host/3",
-                    "password": "probe-secret",
-                },
-                "webhook": {"enabled": False},
-            },
-        },
-        {"site": "tiktok", "environment": "production"},
-    )
-
-    assert stopped == ["profile-a"]
-    assert redis_calls == [
-        (
-            "redis://probe-host/3",
-            {
-                "password": "probe-secret",
-                "socket_connect_timeout": 3,
-                "socket_timeout": 5,
-            },
-        )
-    ]
-    assert checks["profiles"] == "failed"
-    assert checks["redis_aof"] == "passed"
-    assert checks["redis_eviction"] == "passed"
 
 
 def test_real_management_guard_enforces_admin_operator_roles(tmp_path):

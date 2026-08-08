@@ -17,34 +17,37 @@ def element_record():
     return ElementRecord(
         id="comment-entry",
         display_name="Comment entry",
-        management_source="automatic",
-        published_status="healthy",
-        draft_status=None,
-        scope="active_video",
-        primary_locator_type="attribute",
+        status="healthy",
+        page_key="comment-panel",
+        primary_locator_type="css",
         dependency_count=2,
         last_validated_at="2026-07-29T03:00:00+00:00",
         revision=4,
     )
 
 
-def test_detail_omits_raw_browser_and_model_data(element_record):
+def test_detail_exposes_manual_definition_and_omits_sensitive_data(element_record):
     payload = public_element_detail(
         element_record,
-        evidence={
-            "profile_id": "full-profile-secret",
-            "profile_mask": "***3A7F",
-            "raw_dom": "<html>secret</html>",
-            "raw_ax": {"secret": True},
-            "prompt": "private prompt",
-            "model_output": "private output",
-            "rounds": [
-                {
-                    "round_number": 1,
-                    "result": "passed",
-                    "failure_code": "",
-                    "raw_dom": "nested secret",
-                }
+        definition={
+            "page_key": "comment-panel",
+            "target_origin": "https://www.tiktok.com",
+            "url_pattern": "https://www.tiktok.com/*",
+            "operation_steps": [],
+            "fingerprint": {
+                "tag": "button",
+                "role": "button",
+                "position_hint": {
+                    "x": 0.8,
+                    "y": 0.4,
+                    "width": 0.1,
+                    "height": 0.1,
+                },
+                "cdp": "ws://127.0.0.1:9222/devtools/browser/secret",
+                "endpoint": "<html>private</html>",
+            },
+            "locators": [
+                {"type": "css", "value": '[data-e2e="comment"]'}
             ],
         },
         dependencies=(
@@ -56,10 +59,30 @@ def test_detail_omits_raw_browser_and_model_data(element_record):
                 "secret": "drop-me",
             },
         ),
+        validation={
+            "status": "passed",
+            "raw_dom": "<html>secret</html>",
+            "prompt": "private prompt",
+            "model_output": "private output",
+        },
+        alerts=[{"id": "alert-1", "token": "drop-me"}],
+        strategy_controls={"paused": False, "profile_id": "drop-me"},
     )
 
     text = str(payload)
-    assert "***3A7F" in text
+    assert payload["definition"]["locators"] == [
+        {"type": "css", "value": '[data-e2e="comment"]'}
+    ]
+    assert payload["definition"]["fingerprint"] == {
+        "tag": "button",
+        "role": "button",
+        "position_hint": {
+            "x": 0.8,
+            "y": 0.4,
+            "width": 0.1,
+            "height": 0.1,
+        },
+    }
     assert payload["dependencies"] == [
         {
             "strategy_id": "comment-flow",
@@ -69,14 +92,16 @@ def test_detail_omits_raw_browser_and_model_data(element_record):
         }
     ]
     for forbidden in (
-        "full-profile-secret",
         "<html>",
         "private prompt",
         "private output",
-        "nested secret",
         "drop-me",
+        "devtools/browser",
+        "<html>private</html>",
     ):
         assert forbidden not in text
+    for obsolete in ("contract", "repairs", "candidate_comparison"):
+        assert obsolete not in payload
 
 
 def test_summary_and_error_have_exact_public_shapes(element_record):
@@ -87,20 +112,16 @@ def test_summary_and_error_have_exact_public_shapes(element_record):
         details={"field": "status", "token": "drop-me"},
     )
 
-    assert summary["runtime_status"] == "healthy"
+    assert summary["status"] == "healthy"
     assert set(summary) == {
         "id",
         "display_name",
-        "management_source",
-        "published_status",
-        "draft_status",
-        "runtime_status",
-        "scope",
+        "status",
+        "page_key",
         "primary_locator_type",
         "dependency_count",
         "last_validated_at",
         "revision",
-        "migration_available",
     }
     assert error == {
         "error": {

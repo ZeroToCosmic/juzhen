@@ -1,0 +1,324 @@
+<section class="panel" id="panel-strategies">
+  <section class="settings-group" data-settings-group="browser-actions">
+    <div class="selector-probe-console selector-console-layout">
+      <header class="selector-probe-header selector-console-header">
+        <div>
+          <h3 class="selector-probe-title">网页元素与执行策略</h3>
+          <p class="muted selector-probe-description">人工选择页面元素；系统验证保存路径，并只保护受影响策略。</p>
+        </div>
+        <div class="selector-probe-actions" aria-label="探针快捷操作">
+          <span id="selector-probe-health" class="selector-probe-health" data-health="unknown" role="status" aria-live="polite">○ 状态未知</span>
+          <button id="selector-probe-refresh" class="secondary" type="button">刷新</button>
+          <button id="selector-probe-run-now" class="primary" type="button">运行探针</button>
+          <span class="selector-probe-alert-count">未处理告警 <strong id="selector-probe-unread-alerts" role="status" aria-live="polite">0</strong></span>
+        </div>
+      </header>
+
+      <div class="selector-console-body">
+        <nav class="selector-console-nav selector-probe-tabs" role="tablist" aria-label="网页元素管理">
+          <button class="selector-probe-tab" id="selector-probe-tab-collect" type="button" role="tab" aria-selected="true" aria-controls="selector-probe-panel-collect" data-selector-probe-tab="collect">采集元素</button>
+          <button class="selector-probe-tab" id="selector-probe-tab-managed" type="button" role="tab" aria-selected="false" aria-controls="selector-probe-panel-managed" data-selector-probe-tab="managed" tabindex="-1">已选元素</button>
+          <button class="selector-probe-tab" id="selector-probe-tab-operations" type="button" role="tab" aria-selected="false" aria-controls="selector-probe-panel-operations" data-selector-probe-tab="operations" tabindex="-1">运行与告警</button>
+          <button class="selector-probe-tab" id="selector-probe-tab-settings" type="button" role="tab" aria-selected="false" aria-controls="selector-probe-panel-settings" data-selector-probe-tab="settings" tabindex="-1">系统设置</button>
+        </nav>
+
+        <main class="selector-console-content">
+          <p id="selector-probe-page-status" class="selector-probe-page-status" role="status" aria-live="polite"></p>
+
+          <section class="selector-console-panel selector-probe-panel is-active" id="selector-probe-panel-collect" role="tabpanel" aria-labelledby="selector-probe-tab-collect" data-selector-probe-panel="collect">
+            <div class="selector-section-heading">
+              <div><h3>采集元素</h3><p class="muted">打开独立测试 Profile，手动进入目标页面，再从当前可见交互元素中选择。</p></div>
+              <button id="selector-element-picker" class="primary" type="button">开始采集</button>
+            </div>
+            <ol class="selector-collector-progress" aria-label="采集流程">
+              <li data-collector-step="open">1. 打开页面</li>
+              <li data-collector-step="operate">2. 手动操作</li>
+              <li data-collector-step="scan">3. 扫描当前页面</li>
+              <li data-collector-step="save">4. 命名并保存</li>
+            </ol>
+            <form id="selector-picker-form" class="selector-collector-start">
+              <label>测试 Profile<select id="selector-picker-profile" name="profileRef"></select></label>
+              <label>起始页面状态
+                <select id="selector-picker-page-state" name="pageState">
+                  <option value="feed_ready">TikTok 首页</option>
+                  <option value="comment_panel_open">评论区已打开</option>
+                </select>
+              </label>
+              <button id="selector-picker-start" type="button">打开测试窗口</button>
+              <button id="selector-picker-cancel" class="secondary" type="button">取消采集</button>
+            </form>
+            <p id="selector-picker-status" class="selector-probe-page-status" role="status" aria-live="polite">尚未开始</p>
+            <div class="selector-inventory-toolbar" role="search" aria-label="筛选采集元素">
+              <label>类型<select id="selector-inventory-type"><option value="all">全部</option><option value="button">按钮</option><option value="input">输入</option><option value="link">链接</option><option value="region">页面区域</option></select></label>
+              <label>位置<select id="selector-inventory-region"><option value="all">全部</option><option value="top">顶部</option><option value="left">左侧</option><option value="center">中部</option><option value="right">右侧</option><option value="bottom">底部</option></select></label>
+              <label class="selector-inline-check"><input id="selector-inventory-locatable" type="checkbox"> 仅可定位</label>
+              <label class="wide">搜索<input id="selector-inventory-search" type="search" autocomplete="off" placeholder="标签、文本、Role、Name 或路径"></label>
+              <button id="selector-inventory-refresh" type="button">刷新列表</button>
+            </div>
+            <div class="selector-inventory-grid">
+              <section aria-labelledby="selector-inventory-list-title">
+                <div class="selector-section-heading compact"><h4 id="selector-inventory-list-title">页面元素 <span id="selector-picker-count" class="muted">0</span></h4></div>
+                <div id="selector-inventory-list" class="selector-inventory-list"></div>
+                <div id="selector-picker-selections" hidden></div>
+              </section>
+              <aside class="selector-inventory-editor" aria-labelledby="selector-inventory-editor-title">
+                <h4 id="selector-inventory-editor-title">保存检查</h4>
+                <p class="muted">Role/Name 仅帮助阅读，不参与路径匹配。</p>
+                <div id="selector-inventory-selected-summary" class="selector-detail-list"></div>
+                <details><summary>已记录操作步骤</summary><div id="selector-inventory-recorded-steps" class="selector-detail-list"></div></details>
+                <details><summary>CSS / XPath</summary><div id="selector-inventory-locators" class="selector-detail-list"></div></details>
+                <p id="selector-picker-error" class="bad" role="status" aria-live="polite"></p>
+                <button id="selector-picker-confirm" class="primary" type="button">检查并保存</button>
+              </aside>
+            </div>
+          </section>
+
+          <section class="selector-console-panel selector-probe-panel" id="selector-probe-panel-managed" role="tabpanel" aria-labelledby="selector-probe-tab-managed" data-selector-probe-panel="managed" hidden>
+            <div class="selector-section-heading">
+              <div><h3>已选元素</h3><p class="muted">查看路径健康、页面位置及策略影响；失效元素可重新绑定。</p></div>
+              <button id="selector-managed-rebind-new" class="primary" type="button">采集新元素</button>
+            </div>
+            <div id="selector-element-counts" class="selector-summary-grid" aria-label="元素状态统计"></div>
+            <form id="selector-element-filters" class="selector-element-filters" role="search">
+              <label class="wide">搜索<input name="search" type="search" autocomplete="off" placeholder="自定义名称或元素 ID"></label>
+              <label>状态<select name="status"><option value="all">全部</option><option value="pending_rebind">待重新绑定</option><option value="draft">待验证</option><option value="validating">验证中</option><option value="healthy">正常</option><option value="degraded">备用路径</option><option value="invalid">失效</option><option value="disabled">已停用</option></select></label>
+              <label>策略依赖<select name="dependency"><option value="all">全部</option><option value="yes">已引用</option><option value="no">未引用</option></select></label>
+            </form>
+            <div id="selector-managed-elements" class="selector-managed-elements"></div>
+            <div class="selector-pagination">
+              <label>每页<select id="selector-element-page-size"><option value="20">20</option><option value="50">50</option><option value="100">100</option></select></label>
+              <span id="selector-element-page-meta" class="muted">第 1 / 1 页，共 0 项</span>
+              <button id="selector-element-prev" class="secondary" type="button" disabled>上一页</button>
+              <button id="selector-element-next" class="secondary" type="button" disabled>下一页</button>
+            </div>
+            <div id="selector-element-rows" hidden></div>
+            <p id="selector-managed-status" class="selector-probe-page-status" role="status" aria-live="polite"></p>
+            <section class="selector-legacy-strategy-manager" aria-labelledby="selector-legacy-strategy-title">
+              <div class="selector-section-heading"><div><h4 id="selector-legacy-strategy-title">浏览器执行策略</h4><p class="muted">沿用现有策略、行为模式和动作积木；元素引用仍受上方健康检查保护。</p></div></div>
+          <section class="browser-strategy-section" id="browser-elements-manager">
+            <div class="content-toolbar">
+              <div>
+                <h4>元素管理</h4>
+                <span class="muted">元素列表默认只显示自定义名称；XPath 仅在新增或编辑时展示。</span>
+              </div>
+              <button class="secondary" id="browser-element-add" type="button">新增元素</button>
+            </div>
+            <div id="browser-action-elements-list"></div>
+            <span id="browser-element-status" class="muted" role="status"></span>
+          </section>
+
+          <section class="settings-group browser-strategy-section" id="browser-pattern-library">
+            <div class="content-toolbar">
+              <div>
+                <h4>行为模式库</h4>
+                <span class="muted">只录制鼠标轨迹或键盘节奏，不保存输入内容和绝对屏幕坐标。</span>
+              </div>
+              <div class="compact-actions">
+                <button class="secondary" id="browser-pattern-record-mouse" type="button">录制鼠标轨迹</button>
+                <button class="secondary" id="browser-pattern-record-keyboard" type="button">录制键盘节奏</button>
+              </div>
+            </div>
+            <div class="browser-pattern-list" id="browser-pattern-list">
+              <div class="browser-library-empty muted">暂无行为模式。</div>
+            </div>
+            <span id="browser-pattern-status" class="muted" role="status"></span>
+          </section>
+
+          <section class="settings-group browser-strategy-section" id="browser-strategy-list-view">
+            <div class="content-toolbar">
+              <div>
+                <h4>执行策略</h4>
+                <span class="muted">每个策略展示运行模式、动作数量、修复状态和保存状态。</span>
+              </div>
+              <button class="primary" id="browser-strategy-create" type="button">新建策略</button>
+            </div>
+            <div class="browser-strategy-list" id="browser-strategy-list">
+              <div class="browser-library-empty muted">暂无执行策略。</div>
+            </div>
+            <template id="browser-strategy-card-template">
+              <article class="browser-strategy-card">
+                <div>
+                  <strong data-strategy-name></strong>
+                  <span class="muted">
+                    <span data-strategy-mode></span> ·
+                    <span data-strategy-action-count></span> ·
+                    <span data-strategy-repair-state></span> ·
+                    <span data-strategy-save-state></span>
+                  </span>
+                </div>
+                <button class="secondary" data-strategy-open type="button">打开配置</button>
+              </article>
+            </template>
+            <span id="browser-strategy-list-status" class="muted" role="status"></span>
+          </section>
+
+          <section id="browser-strategy-editor-view" class="is-hidden" aria-hidden="true">
+            <div class="browser-strategy-editor">
+              <div class="content-toolbar">
+                <div class="compact-actions">
+                  <button class="secondary" id="browser-strategy-back" type="button">返回策略列表</button>
+                  <input id="browser-strategy-name" autocomplete="off" aria-label="策略名称" placeholder="策略名称">
+                  <button class="secondary" id="browser-strategy-rename" type="button">重命名</button>
+                </div>
+                <div class="compact-actions">
+                  <span id="browser-strategy-save-state" class="muted" role="status">未保存</span>
+                  <button class="secondary" id="browser-strategy-delete" type="button">删除</button>
+                  <button class="primary" id="browser-strategy-save" type="button">保存策略</button>
+                </div>
+              </div>
+              <div class="grid">
+                <label>执行模式
+                  <select id="browser-strategy-run-mode"><option value="once">一次</option><option value="loop">循环</option></select>
+                </label>
+                <label>循环最短时长（分钟）<input id="browser-strategy-loop-minutes-min" type="number" min="0.01" step="0.01"></label>
+                <label>循环最长时长（分钟）<input id="browser-strategy-loop-minutes-max" type="number" min="0.01" step="0.01"></label>
+                <label>每批窗口数<input id="browser-strategy-batch-size" type="number" min="1" max="8" step="1" value="4"></label>
+              </div>
+              <div>
+                <h4>添加动作积木</h4>
+                <div class="browser-block-palette" id="browser-block-palette">
+                  <button class="secondary" data-block-type="move" type="button">移动</button>
+                  <button class="secondary" data-block-type="click" type="button">点击</button>
+                  <button class="secondary" data-block-type="scroll_up" type="button">向上滚动</button>
+                  <button class="secondary" data-block-type="scroll_down" type="button">向下滚动</button>
+                  <button class="secondary" data-block-type="keyboard_input" type="button">键盘输入</button>
+                  <button class="secondary" data-block-type="pause" type="button">停止（等待）</button>
+                </div>
+              </div>
+              <div>
+                <h4>动作顺序</h4>
+                <div class="browser-strategy-actions" id="browser-strategy-actions">
+                  <div class="browser-library-empty muted">选择上方积木后，动作才会出现在这里。</div>
+                </div>
+                <template id="browser-block-card-template">
+                  <article class="browser-block-card">
+                    <div>
+                      <strong data-action-type></strong>
+                      <span class="muted" data-action-summary></span>
+                    </div>
+                    <div class="compact-actions">
+                      <button class="secondary" data-block-edit type="button">编辑</button>
+                      <button class="secondary" data-block-up type="button">上移</button>
+                      <button class="secondary" data-block-down type="button">下移</button>
+                      <button class="secondary" data-block-delete type="button">删除</button>
+                    </div>
+                  </article>
+                </template>
+              </div>
+            </div>
+          </section>
+
+          <dialog id="browser-element-dialog">
+            <form id="browser-element-form" method="dialog">
+              <div class="dialog-header">
+                <h3 id="browser-element-dialog-title">编辑网页元素</h3>
+                <button class="icon-button" id="browser-element-dialog-close" type="button" aria-label="关闭">×</button>
+              </div>
+              <label>元素名称<input id="browser-element-alias" required autocomplete="off"></label>
+              <label>元素作用域
+                <select id="browser-element-scope">
+                  <option value="page">页面</option>
+                  <option value="active_video">当前视频</option>
+                  <option value="visible_comment_panel">可见评论面板</option>
+                </select>
+              </label>
+              <div class="content-toolbar">
+                <strong>有序定位候选</strong>
+                <button class="secondary" id="browser-element-add-locator" type="button">添加候选</button>
+              </div>
+              <div id="browser-element-locators"></div>
+              <span class="muted">{{ '\u9ad8\u7ea7' }} XPath</span>
+              <div class="compact-actions">
+                <button class="secondary" id="browser-element-template" type="button">应用 TikTok 评论模板</button>
+                <button class="secondary" id="browser-element-test" type="button">测试当前草稿</button>
+              </div>
+              <div class="table-wrap">
+                <table aria-label="元素测试结果">
+                  <thead><tr><th>窗口</th><th>元素</th><th>状态</th><th>代码</th><th>诊断</th></tr></thead>
+                  <tbody id="browser-element-test-results"></tbody>
+                </table>
+              </div>
+              <span class="bad" id="browser-element-dialog-status"></span>
+              <div class="dialog-actions">
+                <button id="browser-element-dialog-cancel" type="button">取消</button>
+                <button class="primary" type="submit">保存元素</button>
+              </div>
+            </form>
+          </dialog>
+          <dialog id="browser-block-parameter-dialog">
+            <form id="browser-block-parameter-form" method="dialog">
+              <div class="dialog-header">
+                <h3 id="browser-block-parameter-title">配置动作积木</h3>
+                <button class="icon-button" id="browser-block-parameter-close" type="button" aria-label="关闭">×</button>
+              </div>
+              <div class="grid" id="browser-block-parameter-fields"></div>
+              <span class="bad" id="browser-block-parameter-status" role="status"></span>
+              <div class="dialog-actions">
+                <button id="browser-block-parameter-cancel" type="button">取消</button>
+                <button class="primary" type="submit">应用参数</button>
+              </div>
+            </form>
+          </dialog>
+            </section>
+          </section>
+
+          <section class="selector-console-panel selector-probe-panel" id="selector-probe-panel-operations" role="tabpanel" aria-labelledby="selector-probe-tab-operations" data-selector-probe-panel="operations" hidden>
+            <div class="selector-section-heading">
+              <div><h3>运行与告警</h3><p class="muted">默认显示五个业务步骤；技术字段只在诊断详情中显示。</p></div>
+              <button id="selector-run-now" class="primary" type="button">运行探针</button>
+            </div>
+            <p id="selector-run-status" class="selector-probe-page-status" role="status" aria-live="polite"></p>
+            <section aria-labelledby="selector-run-current-title">
+              <h4 id="selector-run-current-title">最近一次运行</h4>
+              <div id="selector-run-current-steps" class="selector-run-step-list"></div>
+              <div id="selector-run-rows" class="selector-operation-list"></div>
+            </section>
+            <details class="selector-diagnostic-details">
+              <summary>诊断详情</summary>
+              <p class="muted">Profile/CDP 绑定、两轮证据、重试、发布事务、协调、清理和租约。</p>
+              <div id="selector-version-rows" class="selector-operation-list"></div>
+              <div id="selector-gate-counts" class="selector-summary-grid selector-operation-summary"></div>
+              <div id="selector-gate-rows" class="selector-operation-list"></div>
+              <span id="selector-gate-status" class="muted" role="status" aria-live="polite"></span>
+              <span id="selector-version-status" class="muted" role="status" aria-live="polite"></span>
+            </details>
+            <section class="selector-alert-center" aria-labelledby="selector-alert-center-title">
+              <div class="selector-section-heading compact"><h4 id="selector-alert-center-title">告警中心</h4><span id="selector-alert-status" class="muted" role="status" aria-live="polite"></span></div>
+              <div id="selector-alert-counts" class="selector-summary-grid selector-operation-summary"></div>
+              <div id="selector-alert-rows" class="selector-operation-list"></div>
+            </section>
+          </section>
+
+          <section class="selector-console-panel selector-probe-panel" id="selector-probe-panel-settings" role="tabpanel" aria-labelledby="selector-probe-tab-settings" data-selector-probe-panel="settings" hidden>
+            <div class="selector-section-heading"><div><h3>系统设置</h3><p class="muted">测试 Profile、每日时间、网页等待、Webhook、Redis 与权限。</p></div><span id="selector-settings-status" class="muted" role="status" aria-live="polite"></span></div>
+            <form id="selector-settings-form" class="selector-settings-form">
+              <section class="selector-settings-card">
+                <h4>运行计划</h4><div id="selector-settings-basic" class="selector-detail-list"></div>
+                <div class="grid">
+                  <label><input name="enabled" type="checkbox" data-selector-settings-editable> 启用每日探针</label>
+                  <label>发布模式<select name="rolloutMode" data-selector-settings-editable><option value="observe">观察</option><option value="publish">验证并发布</option><option value="enforce">验证、发布并保护策略</option></select></label>
+                  <label>每日时间<input name="scheduleTime" type="time" value="03:00" data-selector-settings-editable></label>
+                  <label>目标网页<input name="targetOrigin" type="url" data-selector-settings-editable></label>
+                  <label>页面等待（秒）<input name="pageTimeoutSeconds" type="number" min="30" max="180" value="90" data-selector-settings-editable></label>
+                </div>
+              </section>
+              <section class="selector-settings-card">
+                <h4>独立 AdsPower 测试 Profiles</h4><div id="selector-settings-profiles" class="selector-detail-list"></div>
+                <p class="muted">至少两个独立 Profile；仅显示脱敏标识。</p>
+                <label>新增 Profile IDs（每行一个）<textarea name="profileAdd" rows="4" autocomplete="off" data-selector-settings-editable></textarea></label>
+                <div class="actions"><button id="selector-settings-profile-stage" type="button" data-selector-settings-editable>加入暂存列表</button><button id="selector-settings-profile-import" type="button" data-selector-settings-editable>导入当前已选 Profiles</button></div>
+                <div id="selector-settings-profile-staged" class="selector-detail-list"></div>
+              </section>
+              <section class="selector-settings-card"><h4>Redis</h4><div id="selector-settings-redis" class="selector-detail-list"></div><label>Namespace<input name="redisNamespace" data-selector-settings-editable></label><label>设置密码（留空保持）<input name="redisPassword" type="password" autocomplete="new-password" data-selector-settings-editable></label><button class="danger" type="button" data-settings-secret-clear="redis_password" data-selector-settings-editable>清除 Redis 密码</button></section>
+              <section class="selector-settings-card"><h4>Webhook</h4><div id="selector-settings-webhook" class="selector-detail-list"></div><div class="grid"><label><input name="webhookEnabled" type="checkbox" data-selector-settings-editable> 启用 Webhook</label><label>类型<select name="webhookType" data-selector-settings-editable><option value="generic">generic</option><option value="slack">slack</option><option value="dingtalk">dingtalk</option></select></label><label>设置 URL（留空保持）<input name="webhookUrl" type="password" autocomplete="new-password" data-selector-settings-editable></label><label>签名秘密（留空保持）<input name="webhookSigningSecret" type="password" autocomplete="new-password" data-selector-settings-editable></label></div><button class="danger" type="button" data-settings-secret-clear="webhook_signing_secret" data-selector-settings-editable>清除签名秘密</button><button id="selector-settings-webhook-test" type="button">发送测试告警</button></section>
+              <section class="selector-settings-card"><h4>权限与人工控制</h4><div id="selector-settings-permissions" class="selector-detail-list"></div><p>人工暂停/恢复不会被探针自动覆盖；可在“运行与告警”的策略影响详情中操作。</p><label>危险变更原因<textarea name="reason" maxlength="500" data-selector-settings-editable></textarea></label><div class="selector-operation-actions"><button id="selector-settings-save" class="primary" type="button">检查并保存</button><button id="selector-settings-reload" type="button" hidden>重新加载</button></div><p id="selector-settings-save-status" class="bad" role="status" aria-live="polite"></p><p id="selector-account-status" role="status" aria-live="polite"></p><div id="selector-account-rows"></div></section>
+            </form>
+          </section>
+        </main>
+      </div>
+
+      <dialog id="selector-operation-confirm-dialog" class="selector-element-dialog selector-operation-dialog"><form id="selector-operation-confirm-form"><div class="dialog-header"><div><span class="muted">操作确认</span><h3 id="selector-operation-confirm-title">确认操作</h3></div><button id="selector-operation-confirm-close" class="icon-button" type="button" aria-label="关闭">×</button></div><p id="selector-operation-confirm-target"></p><p id="selector-operation-confirm-outcome" class="selector-operation-notice"></p><label id="selector-operation-reason-label"><span id="selector-operation-reason-text">原因</span><textarea id="selector-operation-reason" name="reason" maxlength="500" required></textarea></label><p id="selector-operation-confirm-error" class="bad" role="status" aria-live="polite"></p><div class="dialog-actions"><button id="selector-operation-confirm-cancel" type="button">取消</button><button id="selector-operation-confirm-submit" class="primary" type="submit">确认</button></div></form></dialog>
+      <dialog id="selector-operation-detail-dialog" class="selector-element-dialog selector-operation-dialog"><div class="dialog-header"><div><span class="muted">只读详情</span><h3 id="selector-operation-detail-title">详情</h3></div><button id="selector-operation-detail-close" class="icon-button" type="button" aria-label="关闭">×</button></div><div id="selector-operation-detail-body" class="selector-operation-list"></div><section id="selector-run-stage-detail" class="selector-run-stage-list"></section><details id="selector-run-technical-details" class="selector-run-technical-details" hidden><summary>诊断详情</summary><div id="selector-run-technical-lines" class="selector-operation-list"></div></details><p id="selector-operation-detail-error" class="bad" role="status" aria-live="polite"></p><div id="selector-operation-detail-actions" class="dialog-actions"></div></dialog>
+    </div>
+  </section>
+</section>

@@ -11,6 +11,7 @@
     "tiktok-sampler": "node browser/tiktok-sampler.js"
   },
   "dependencies": {
+    "@cypress/unique-selector": "2.2.0",
     "ghost-cursor": "1.4.2",
     "openai": "^6.45.0",
     "playwright": "^1.55.0"

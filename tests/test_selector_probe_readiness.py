@@ -2,6 +2,7 @@ import asyncio
 
 import pytest
 
+import selector_probe.readiness as readiness_module
 from selector_probe.readiness import (
     ReadinessError,
     ReadinessToken,
@@ -111,6 +112,40 @@ def test_unstable_semantics_timeout_without_token():
         assert caught.value.code == "page_readiness_timeout"
 
     asyncio.run(scenario())
+
+
+def test_navigation_shell_without_active_video_controls_times_out():
+    async def scenario():
+        page = SamplePage(
+            [
+                sample(
+                    feed_visible=False,
+                    fingerprints=[
+                        "link|for you|data-e2e=nav-foryou",
+                        "searchbox|search|data-e2e=nav-search",
+                    ],
+                )
+            ]
+        )
+        with pytest.raises(ReadinessError) as caught:
+            await wait_for_semantic_readiness(
+                page,
+                expected_origin="https://www.tiktok.com",
+                timeout_seconds=3,
+                sleep_fn=page.sleep,
+                monotonic_fn=page.monotonic,
+            )
+        assert caught.value.code == "page_readiness_timeout"
+
+    asyncio.run(scenario())
+
+
+def test_browser_sampler_does_not_treat_main_shell_as_feed_ready():
+    script = readiness_module._READINESS_SAMPLE_SCRIPT
+
+    assert '"main"' not in script
+    assert '[data-e2e="comment-icon"]' in script
+    assert '[data-e2e="like-icon"]' in script
 
 
 def test_origin_mismatch_fails_closed():

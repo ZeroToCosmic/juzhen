@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:local:architecture:selector-publication-outbox",
+  "title": "Selector publication outbox row contract",
+  "type": "object",
+  "properties": {
+    "event_type": {"type": "string", "minLength": 1},
+    "aggregate_id": {"type": "string", "minLength": 1},
+    "element_request_id": {"type": "string"},
+    "element_request_generation": {"type": "integer", "minimum": 0},
+    "payload": {"type": "object"},
+    "status": {"type": "string", "minLength": 1},
+    "attempt_count": {"type": "integer", "minimum": 0},
+    "claim_generation": {"type": "integer", "minimum": 0},
+    "next_attempt_at": {"type": "string", "format": "date-time"}
+  },
+  "required": ["event_type", "aggregate_id", "payload", "status", "attempt_count", "claim_generation", "next_attempt_at"],
+  "additionalProperties": false
+}

@@ -11,6 +11,7 @@ import pytest
 from selector_probe.registry import reconcile_registry
 from selector_probe.store import (
     ElementRequestInProgressError,
+    LegacyElementWorkflowRetiredError,
     ManagementIdempotencyConflictError,
     SelectorProbeStore,
 )
@@ -179,6 +180,7 @@ def test_store_initializes_phase_one_schema_and_finishes_run(tmp_path):
         }
 
 
+@pytest.mark.skip(reason="legacy semantic contract storage is retired")
 def test_contract_aliases_are_replaced_atomically(tmp_path):
     with SelectorProbeStore(tmp_path / "probe.db") as store:
         store.save_contracts(
@@ -219,6 +221,7 @@ def test_contract_aliases_are_replaced_atomically(tmp_path):
         }
 
 
+@pytest.mark.skip(reason="legacy semantic contract storage is retired")
 def test_contract_replacement_preserves_other_site_environment_scopes(tmp_path):
     with SelectorProbeStore(tmp_path / "probe.db") as store:
         store.save_contracts(
@@ -267,6 +270,7 @@ def test_contract_replacement_preserves_other_site_environment_scopes(tmp_path):
         ]
 
 
+@pytest.mark.skip(reason="legacy semantic contract storage is retired")
 def test_contract_seed_preserves_db_managed_catalog_and_lists_enabled(tmp_path):
     with SelectorProbeStore(tmp_path / "probe.db") as store:
         store.seed_contracts(
@@ -309,6 +313,7 @@ def test_contract_seed_preserves_db_managed_catalog_and_lists_enabled(tmp_path):
     assert contracts["default-new"]["scope"] == "page"
 
 
+@pytest.mark.skip(reason="legacy semantic contract storage is retired")
 def test_contract_alias_is_isolated_by_site_and_environment(tmp_path):
     with SelectorProbeStore(tmp_path / "probe.db") as store:
         store.upsert_contract(
@@ -712,6 +717,7 @@ def test_last_completed_slot_ignores_unfinished_and_returns_latest_instant(tmp_p
         ).fetchone()["status"] == "running"
 
 
+@pytest.mark.skip(reason="superseded by deterministic v3 storage tests")
 def test_json_columns_are_serialized_deterministically(tmp_path):
     with SelectorProbeStore(tmp_path / "probe.db") as store:
         run_id = store.start_run(
@@ -771,6 +777,7 @@ def test_json_columns_are_serialized_deterministically(tmp_path):
         {"评论入口": {"value": object()}},
     ],
 )
+@pytest.mark.skip(reason="legacy semantic contract storage is retired")
 def test_invalid_contract_input_does_not_destroy_existing_rows(
     tmp_path, invalid_contracts
 ):
@@ -1418,6 +1425,283 @@ def test_catalog_migration_preserves_partial_plan_rows_and_legacy_dependencies(t
         assert store.connection.execute("PRAGMA foreign_key_check").fetchall() == []
 
 
+def legacy_store_with_contract_and_dependency(tmp_path):
+    path = tmp_path / "legacy-manual-elements.db"
+    connection = sqlite3.connect(path)
+    try:
+        connection.executescript(
+            """
+            CREATE TABLE element_probe_contracts (
+                alias TEXT NOT NULL,
+                site TEXT NOT NULL DEFAULT 'tiktok',
+                environment TEXT NOT NULL DEFAULT 'production',
+                contract_json TEXT NOT NULL,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY(site, environment, alias)
+            );
+            INSERT INTO element_probe_contracts VALUES (
+                'comment-entry', 'tiktok', 'production',
+                '{"intent":"find comments","accepted_roles":["button"]}',
+                1, '2026-08-01T00:00:00+00:00'
+            );
+            CREATE TABLE strategy_dependencies (
+                alias TEXT NOT NULL,
+                strategy_id TEXT NOT NULL,
+                action_id TEXT NOT NULL,
+                action_type TEXT NOT NULL,
+                PRIMARY KEY(alias, strategy_id, action_id)
+            );
+            INSERT INTO strategy_dependencies VALUES (
+                'comment-entry', 'strategy-1', 'open-comments', 'click'
+            );
+            CREATE TABLE managed_elements (
+                id TEXT PRIMARY KEY,
+                display_name TEXT NOT NULL,
+                management_source TEXT NOT NULL,
+                published_status TEXT NOT NULL,
+                draft_status TEXT,
+                active_version_id TEXT NOT NULL DEFAULT '',
+                scope TEXT NOT NULL,
+                primary_locator_type TEXT NOT NULL DEFAULT '',
+                last_validated_at TEXT,
+                revision INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            INSERT INTO managed_elements VALUES (
+                'comment-entry', '评论入口', 'automatic', 'healthy', NULL,
+                'selector-v7', 'active_video', 'attribute',
+                '2026-08-01T03:00:00+00:00', 7,
+                '2026-07-01T00:00:00+00:00',
+                '2026-08-01T03:00:00+00:00'
+            );
+            CREATE TABLE element_drafts (
+                element_id TEXT PRIMARY KEY REFERENCES managed_elements(id),
+                contract_json TEXT NOT NULL,
+                candidates_json TEXT NOT NULL DEFAULT '[]',
+                validation_json TEXT NOT NULL DEFAULT '{}',
+                base_version_id TEXT NOT NULL DEFAULT '',
+                revision INTEGER NOT NULL DEFAULT 1,
+                created_by INTEGER NOT NULL,
+                created_by_username TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            INSERT INTO element_drafts VALUES (
+                'comment-entry',
+                '{"intent":"find comments","accepted_names":["Comments"]}',
+                '[{"type":"role","value":"button:Comments"}]', '{}',
+                'selector-v6', 4, 7, 'admin',
+                '2026-07-01T00:00:00+00:00',
+                '2026-08-01T03:00:00+00:00'
+            );
+            """
+        )
+        connection.commit()
+    finally:
+        connection.close()
+    return SelectorProbeStore(path)
+
+
+def test_store_migrates_legacy_elements_to_pending_rebind_idempotently(
+    tmp_path,
+):
+    with legacy_store_with_contract_and_dependency(tmp_path) as store:
+        store.migrate_manual_elements()
+        store.migrate_manual_elements()
+
+        row = store.get_managed_element_row("comment-entry")
+        definition = store.manual_element_definition("comment-entry")
+        dependency = store.managed_element_dependency_rows("comment-entry")[0]
+
+        assert row["display_name"] == "评论入口"
+        assert row["status"] == "pending_rebind"
+        assert row["active_version_id"] == "selector-v7"
+        assert row["last_known_good_version_id"] == "selector-v7"
+        assert row["revision"] == 7
+        assert row["created_at"] == "2026-07-01T00:00:00+00:00"
+        assert row["updated_at"] == "2026-08-01T03:00:00+00:00"
+        assert definition is None
+        assert dependency["strategy_id"] == "strategy-1"
+        assert store.connection.execute(
+            "SELECT COUNT(*) FROM element_probe_contracts"
+        ).fetchone()[0] == 1
+
+
+def test_fresh_store_has_v2_manual_element_columns_and_status_constraint(
+    tmp_path,
+):
+    with SelectorProbeStore(tmp_path / "fresh-v2.db") as store:
+        managed_columns = {
+            row["name"]
+            for row in store.connection.execute(
+                "PRAGMA table_info(managed_elements)"
+            )
+        }
+        draft_columns = {
+            row["name"]
+            for row in store.connection.execute(
+                "PRAGMA table_info(element_drafts)"
+            )
+        }
+
+        assert {
+            "status",
+            "page_key",
+            "target_origin",
+            "url_pattern",
+            "last_known_good_version_id",
+        }.issubset(managed_columns)
+        assert "definition_json" in draft_columns
+        with pytest.raises(sqlite3.IntegrityError):
+            store.connection.execute(
+                """
+                INSERT INTO managed_elements (
+                    id, display_name, status, created_at, updated_at
+                ) VALUES ('bad', 'Bad', 'unknown', 'now', 'now')
+                """
+            )
+
+
+def test_store_creates_renames_and_rebinds_manual_definition(tmp_path):
+    first = {
+        "page_key": "comment-panel",
+        "target_origin": "https://www.tiktok.com",
+        "url_pattern": "https://www.tiktok.com/*",
+        "operation_steps": [],
+        "fingerprint": {"tag": "button"},
+        "locators": [{"type": "css", "value": "[data-e2e=\"comment\"]"}],
+    }
+    second = {
+        **first,
+        "url_pattern": "https://www.tiktok.com/video/*",
+        "fingerprint": {"tag": "div"},
+        "locators": [{"type": "xpath", "value": "//*[@data-e2e='comment']"}],
+    }
+    with SelectorProbeStore(tmp_path / "manual-crud.db") as store:
+        revision = store.create_manual_element_draft(
+            element_id="comment-entry",
+            display_name="评论入口",
+            definition=first,
+            page_key="comment-panel",
+            target_origin="https://www.tiktok.com",
+            url_pattern="https://www.tiktok.com/*",
+            actor_user_id=7,
+            actor_username="admin",
+        )
+        renamed_revision = store.update_manual_element_name(
+            element_id="comment-entry",
+            display_name="评论按钮",
+            expected_revision=revision,
+            actor_user_id=7,
+            actor_username="admin",
+        )
+        rebound_revision = store.rebind_manual_element(
+            element_id="comment-entry",
+            definition=second,
+            page_key="comment-panel",
+            target_origin="https://www.tiktok.com",
+            url_pattern="https://www.tiktok.com/video/*",
+            expected_revision=renamed_revision,
+            actor_user_id=7,
+            actor_username="admin",
+        )
+        row = store.get_managed_element_row("comment-entry")
+        draft = store.managed_element_draft_row("comment-entry")
+
+        assert rebound_revision == 3
+        assert row["display_name"] == "评论按钮"
+        assert row["status"] == "draft"
+        assert row["url_pattern"] == "https://www.tiktok.com/video/*"
+        assert row["primary_locator_type"] == "xpath"
+        assert store.manual_element_definition("comment-entry") == second
+        assert json.loads(draft["contract_json"]) == {}
+        assert json.loads(draft["candidates_json"]) == []
+
+
+def _manual_store_definition(**changes):
+    value = {
+        "page_key": "comment-panel",
+        "target_origin": "https://www.tiktok.com",
+        "url_pattern": "https://www.tiktok.com/*",
+        "operation_steps": [],
+        "fingerprint": {"tag": "button"},
+        "locators": [
+            {"type": "css", "value": "[data-e2e=\"comment\"]"}
+        ],
+    }
+    value.update(changes)
+    return value
+
+
+def test_store_revalidates_every_manual_definition_field(tmp_path):
+    base = _manual_store_definition()
+    unsafe = [
+        {
+            **base,
+            "locators": [
+                base["locators"][0],
+                {"type": "role", "value": "button:Comments"},
+            ],
+        },
+        {**base, "semantic_contract": {"role": "button"}},
+        {
+            **base,
+            "target_origin": "http://www.tiktok.com",
+            "url_pattern": "http://www.tiktok.com/*",
+        },
+        {**base, "fingerprint": {"blob": "x" * (16 * 1024)}},
+    ]
+    with SelectorProbeStore(tmp_path / "strict-manual.db") as store:
+        for index, definition in enumerate(unsafe):
+            with pytest.raises(ValueError):
+                store.create_manual_element_draft(
+                    element_id=f"unsafe-{index}",
+                    display_name=f"Unsafe {index}",
+                    definition=definition,
+                    page_key=str(definition["page_key"]),
+                    target_origin=str(definition["target_origin"]),
+                    url_pattern=str(definition["url_pattern"]),
+                    actor_user_id=7,
+                    actor_username="admin",
+                )
+
+        assert store.managed_element_ids() == ()
+
+
+def test_legacy_projection_maps_failure_to_invalid_or_degraded(tmp_path):
+    with SelectorProbeStore(tmp_path / "projection-status.db") as store:
+        common = {
+            "display_name": "Projected",
+            "management_source": "automatic",
+            "published_status": "failed",
+            "draft_status": None,
+            "scope": "active_video",
+            "primary_locator_type": "css",
+            "last_validated_at": None,
+            "actor_user_id": 7,
+            "actor_username": "admin",
+        }
+        store.upsert_managed_element_projection(
+            element_id="without-version",
+            active_version_id="",
+            **common,
+        )
+        store.upsert_managed_element_projection(
+            element_id="with-version",
+            active_version_id="selector-v1",
+            **common,
+        )
+
+        assert store.get_managed_element_row("without-version")["status"] == (
+            "invalid"
+        )
+        assert store.get_managed_element_row("with-version")["status"] == (
+            "degraded"
+        )
+
+
 def _reserve_element_request(store, request_id="request-one"):
     store.create_managed_element_draft(
         element_id="element-request",
@@ -1449,6 +1733,7 @@ def _reserve_element_request(store, request_id="request-one"):
     )
 
 
+@pytest.mark.skip(reason="legacy element request workflow is retired")
 def test_element_request_reservation_and_audit_are_atomic(tmp_path):
     with SelectorProbeStore(tmp_path / "selector-probe.db") as store:
         store.create_managed_element_draft(
@@ -1496,6 +1781,7 @@ def test_element_request_reservation_and_audit_are_atomic(tmp_path):
         assert store.get_element_request("request-atomic") is None
 
 
+@pytest.mark.skip(reason="legacy element request workflow is retired")
 def test_element_request_claim_is_single_owner_and_repeated_claim_is_empty(
     tmp_path,
 ):
@@ -1517,6 +1803,7 @@ def test_element_request_claim_is_single_owner_and_repeated_claim_is_empty(
     assert claim("worker-c") is None
 
 
+@pytest.mark.skip(reason="legacy element request workflow is retired")
 def test_element_request_read_guard_does_not_open_write_transaction_or_renew(
     tmp_path,
 ):
@@ -1547,6 +1834,34 @@ def test_element_request_read_guard_does_not_open_write_transaction_or_renew(
         assert after["updated_at"] == before["updated_at"]
 
 
+@pytest.mark.skip(reason="legacy element request workflow is retired")
+def test_retryable_element_request_remains_validating(tmp_path):
+    now = datetime(2099, 7, 29, 4, 0, tzinfo=UTC)
+    with SelectorProbeStore(tmp_path / "retryable-request.db") as store:
+        _reserve_element_request(store)
+        claim = store.claim_element_request(
+            claim_token="retry-worker",
+            now=now,
+        )
+
+        result = store.fail_element_request(
+            claim["request_id"],
+            claim["claim_token"],
+            claim["claim_generation"],
+            error_code="temporary_network_error",
+            retryable=True,
+            now=now + timedelta(seconds=1),
+        )
+        request = store.get_element_request(claim["request_id"])
+        element = store.get_managed_element_row(claim["element_id"])
+
+        assert result["terminal"] is False
+        assert request["status"] == "pending"
+        assert element["draft_status"] == "queued"
+        assert element["status"] == "validating"
+
+
+@pytest.mark.skip(reason="legacy element request workflow is retired")
 def test_expired_element_request_claim_recovers_and_fences_old_worker(tmp_path):
     path = tmp_path / "selector-probe.db"
     started = datetime(2099, 7, 29, 4, 0, tzinfo=UTC)
@@ -1598,8 +1913,12 @@ def test_expired_element_request_claim_recovers_and_fences_old_worker(tmp_path):
         assert request["status"] == "completed"
         assert request["attempt_count"] == 2
         assert len(terminal_audits) == 1
+        element = store.get_managed_element_row("element-request")
+        assert element["status"] == "healthy"
+        assert element["last_known_good_version_id"] == "sel-recovered"
 
 
+@pytest.mark.skip(reason="legacy element request workflow is retired")
 def test_element_request_store_rejects_non_published_validation_result(
     tmp_path,
 ):
@@ -1626,6 +1945,7 @@ def test_element_request_store_rejects_non_published_validation_result(
         assert request["status"] == "processing"
         assert element["published_status"] == "probe_unavailable"
         assert element["draft_status"] == "validating"
+        assert element["status"] == "validating"
 
 
 class _CrashRecoveryRegistry:
@@ -1651,6 +1971,7 @@ class _CrashRecoveryRegistry:
         return "published"
 
 
+@pytest.mark.skip(reason="legacy element request workflow is retired")
 def test_element_publication_recovers_after_stage_crash_without_reexecution(
     tmp_path,
 ):
@@ -1694,6 +2015,9 @@ def test_element_publication_recovers_after_stage_crash_without_reexecution(
         request = restarted.get_element_request(claim["request_id"])
         assert request["status"] == "completed"
         assert request["result"]["new_version"] == version_id
+        element = restarted.get_managed_element_row(claim["element_id"])
+        assert element["status"] == "healthy"
+        assert element["last_known_good_version_id"] == version_id
         assert restarted.connection.execute(
             "SELECT COUNT(*) FROM selector_versions"
         ).fetchone()[0] == 1
@@ -1719,6 +2043,7 @@ def test_element_publication_recovers_after_stage_crash_without_reexecution(
     assert registry.publish_calls == 1
 
 
+@pytest.mark.skip(reason="legacy element request workflow is retired")
 def test_stale_element_generation_cannot_stage_or_publish(tmp_path):
     path = tmp_path / "selector-probe.db"
     bundle = _version_bundle("stale-selector")
@@ -1760,6 +2085,7 @@ def test_stale_element_generation_cannot_stage_or_publish(tmp_path):
 
 
 @pytest.mark.parametrize("terminal_action", ["conflict", "cancel", "reject"])
+@pytest.mark.skip(reason="legacy element request workflow is retired")
 def test_linked_publication_terminal_failure_unlocks_draft_once(
     tmp_path,
     terminal_action,
@@ -1811,6 +2137,7 @@ def test_linked_publication_terminal_failure_unlocks_draft_once(
         assert request["status"] == "failed"
         assert request["staged_version_id"] == version_id
         assert element["draft_status"] == "draft"
+        assert element["status"] == "invalid"
         assert store.connection.execute(
             """
             SELECT COUNT(*)
@@ -1820,6 +2147,7 @@ def test_linked_publication_terminal_failure_unlocks_draft_once(
         ).fetchone()[0] == 1
 
 
+@pytest.mark.skip(reason="legacy element request workflow is retired")
 def test_linked_publication_retry_keeps_publishing_and_mutation_lock(tmp_path):
     path = tmp_path / "retry-linked.db"
     bundle = _version_bundle("retry-linked-selector")
@@ -1849,6 +2177,7 @@ def test_linked_publication_retry_keeps_publishing_and_mutation_lock(tmp_path):
         element = store.get_managed_element_row(claim["element_id"])
         assert request["status"] == "publishing"
         assert element["draft_status"] == "validating"
+        assert element["status"] == "validating"
         with pytest.raises(
             ElementRequestInProgressError,
             match="element-request",
@@ -2124,3 +2453,166 @@ def test_management_run_request_deduplicates_active_run(tmp_path):
         assert store.connection.execute(
             "SELECT COUNT(*) FROM management_run_requests"
         ).fetchone()[0] == 1
+
+
+def test_final_manual_storage_fresh_database_retires_legacy_writes(tmp_path):
+    with SelectorProbeStore(tmp_path / "fresh-final.db") as store:
+        state = store.manual_storage_migration_state()
+
+        assert state["status"] == "completed"
+        assert state["details"]["semantic_payloads_cleared"] is True
+        assert "element_probe_contracts" in state["details"][
+            "physical_cleanup_deferred"
+        ]
+        with pytest.raises(LegacyElementWorkflowRetiredError):
+            store.save_contracts({"comment": {"intent": "semantic"}})
+
+
+def test_final_manual_storage_migrates_contract_orphan_without_semantics(
+    tmp_path,
+):
+    path = tmp_path / "contract-orphan.db"
+    connection = sqlite3.connect(path)
+    connection.executescript(
+        """
+        CREATE TABLE element_probe_contracts (
+            alias TEXT NOT NULL,
+            site TEXT NOT NULL DEFAULT 'tiktok',
+            environment TEXT NOT NULL DEFAULT 'production',
+            contract_json TEXT NOT NULL,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY(site, environment, alias)
+        );
+        INSERT INTO element_probe_contracts VALUES (
+            'orphan-entry', 'tiktok', 'production',
+            '{"intent":"must-not-migrate","accepted_roles":["button"]}',
+            1, '2026-08-01T03:00:00+00:00'
+        );
+        """
+    )
+    connection.close()
+
+    with SelectorProbeStore(path) as store:
+        row = store.get_managed_element_row("orphan-entry")
+        draft = store.managed_element_draft_row("orphan-entry")
+
+        assert row["display_name"] == "orphan-entry"
+        assert row["status"] == "pending_rebind"
+        assert row["revision"] == 1
+        assert store.manual_element_definition("orphan-entry") is None
+        assert json.loads(draft["contract_json"]) == {}
+        assert json.loads(draft["candidates_json"]) == []
+        assert store.connection.execute(
+            "SELECT COUNT(*) FROM strategy_dependencies"
+        ).fetchone()[0] == 0
+
+
+def test_final_manual_storage_blocks_on_inflight_request_without_mutation(
+    tmp_path,
+):
+    path = tmp_path / "inflight.db"
+    with SelectorProbeStore(path) as store:
+        store.connection.execute(
+            "DELETE FROM selector_storage_migrations"
+        )
+        store.connection.execute(
+            """
+            INSERT INTO element_probe_contracts VALUES (
+                'still-running', 'tiktok', 'production',
+                '{"intent":"preserve exactly"}', 1, ?
+            )
+            """,
+            (datetime.now(UTC).isoformat(),),
+        )
+        now = datetime.now(UTC).isoformat()
+        store.connection.execute(
+            """
+            INSERT INTO element_request_outbox (
+                request_id, request_type, element_id, expected_revision,
+                contract_json, actor_user_id, actor_username, status,
+                next_attempt_at, created_at, updated_at
+            ) VALUES (
+                'old-request', 'probe', 'still-running', 1,
+                '{"intent":"preserve exactly"}', 1, 'system', 'pending',
+                ?, ?, ?
+            )
+            """,
+            (now, now, now),
+        )
+        store.connection.commit()
+
+    with SelectorProbeStore(path) as blocked:
+        state = blocked.manual_storage_migration_state()
+        contract = blocked.connection.execute(
+            """
+            SELECT contract_json FROM element_probe_contracts
+            WHERE alias = 'still-running'
+            """
+        ).fetchone()[0]
+
+        assert state["status"] == "blocked"
+        assert state["details"]["active_requests"] == 1
+        assert contract == '{"intent":"preserve exactly"}'
+        assert blocked.get_managed_element_row("still-running") is None
+
+
+def test_final_manual_storage_is_idempotent_and_preserves_managed_state(
+    tmp_path,
+):
+    path = tmp_path / "idempotent-final.db"
+    with SelectorProbeStore(path) as store:
+        revision = store.create_manual_element_draft(
+            element_id="saved-element",
+            display_name="Saved name",
+            definition=_manual_store_definition(),
+            page_key="comment-panel",
+            target_origin="https://www.tiktok.com",
+            url_pattern="https://www.tiktok.com/*",
+            actor_user_id=7,
+            actor_username="admin",
+        )
+        store.connection.execute(
+            """
+            UPDATE managed_elements
+            SET active_version_id = 'sel-v7',
+                last_known_good_version_id = 'sel-v6'
+            WHERE id = 'saved-element'
+            """
+        )
+        store.connection.commit()
+        state_before = store.manual_storage_migration_state()
+
+    with SelectorProbeStore(path) as reopened:
+        row = reopened.get_managed_element_row("saved-element")
+        state_after = reopened.manual_storage_migration_state()
+
+        assert row["display_name"] == "Saved name"
+        assert row["revision"] == revision
+        assert row["active_version_id"] == "sel-v7"
+        assert row["last_known_good_version_id"] == "sel-v6"
+        assert state_after == state_before
+
+
+def test_final_version_storage_ignores_legacy_model_metadata(tmp_path):
+    bundle = _version_bundle("deterministic-only")
+    with SelectorProbeStore(tmp_path / "version-final.db") as store:
+        version_id = store.store_validated_version(
+            bundle=bundle,
+            evidence=_version_evidence(bundle),
+            base_version_id="",
+            model_id="must-not-persist",
+            prompt_version="must-not-persist",
+        )
+        public = store.get_version(version_id)
+        physical = store.connection.execute(
+            """
+            SELECT model_id, prompt_version
+            FROM selector_versions WHERE id = ?
+            """,
+            (version_id,),
+        ).fetchone()
+
+        assert "model_id" not in public
+        assert "prompt_version" not in public
+        assert tuple(physical) == ("", "")

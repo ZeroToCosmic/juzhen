@@ -613,6 +613,37 @@ def _seeded_store_factory(path):
     return store
 
 
+def _runnable_seeded_store_factory(path):
+    store = _seeded_store_factory(path)
+    if store.manual_element_definition("comment-entry") is None:
+        store.create_manual_element_draft(
+            element_id="comment-entry",
+            display_name="Comment entry",
+            definition={
+                "page_key": "feed",
+                "target_origin": "https://www.tiktok.com",
+                "url_pattern": "https://www.tiktok.com/*",
+                "operation_steps": [],
+                "fingerprint": {"tag": "button"},
+                "locators": [{
+                    "type": "css",
+                    "value": "[data-e2e='comment-icon']",
+                }],
+            },
+            page_key="feed",
+            target_origin="https://www.tiktok.com",
+            url_pattern="https://www.tiktok.com/*",
+            actor_user_id=1,
+            actor_username="test",
+        )
+        with store.connection:
+            store.connection.execute(
+                "UPDATE managed_elements SET status = 'healthy' WHERE id = ?",
+                ("comment-entry",),
+            )
+    return store
+
+
 def test_first_probe_unavailable_opens_deduplicated_alert_without_gate(
     tmp_path,
 ):
@@ -636,8 +667,8 @@ def test_first_probe_unavailable_opens_deduplicated_alert_without_gate(
             ),
             reconcile_runner=lambda *_args: {},
             adspower_factory=lambda **_kwargs: object(),
-            healing_runtime_factory=lambda **_kwargs: Runtime(),
-            healing_runner=lambda _runtime: {
+                managed_runtime_factory=lambda **_kwargs: Runtime(),
+            managed_runner=lambda _runtime, *, publish, candidate: {
                 "status": "infrastructure_unavailable",
                 "failure_code": "probe_network_error",
             },
@@ -706,15 +737,15 @@ def test_third_selector_failure_captures_before_cleanup_and_links_alert(
 
     result = worker.run_tick(
         settings_loader=_settings,
-        store_factory=_seeded_store_factory,
+        store_factory=_runnable_seeded_store_factory,
         redis_factory=lambda _url: PolicyRedis(),
         registry_factory=lambda *_args, **_kwargs: PolicyRegistry(
             {"version": "sel-old"}
         ),
         reconcile_runner=lambda *_args: {},
         adspower_factory=lambda **_kwargs: object(),
-        healing_runtime_factory=lambda **_kwargs: Runtime(),
-        healing_runner=lambda _runtime: {
+        managed_runtime_factory=lambda **_kwargs: Runtime(),
+        managed_runner=lambda _runtime, *, publish, candidate: {
             "status": "selector_validation_failed",
             "proposed_pause_aliases": ["comment-entry"],
             "failure_code": "zero_match",
@@ -763,15 +794,15 @@ def test_screenshot_failure_does_not_block_pause_alert_or_cleanup(tmp_path):
 
     result = worker.run_tick(
         settings_loader=_settings,
-        store_factory=_seeded_store_factory,
+        store_factory=_runnable_seeded_store_factory,
         redis_factory=lambda _url: PolicyRedis(),
         registry_factory=lambda *_args, **_kwargs: PolicyRegistry(
             {"version": "sel-old"}
         ),
         reconcile_runner=lambda *_args: {},
         adspower_factory=lambda **_kwargs: object(),
-        healing_runtime_factory=lambda **_kwargs: Runtime(),
-        healing_runner=lambda _runtime: {
+        managed_runtime_factory=lambda **_kwargs: Runtime(),
+        managed_runner=lambda _runtime, *, publish, candidate: {
             "status": "selector_validation_failed",
             "proposed_pause_aliases": ["comment-entry"],
             "failure_code": "zero_match",
@@ -912,8 +943,8 @@ def test_healthy_active_with_probe_gate_republishes_before_recovery(tmp_path):
         registry_factory=lambda *_args, **_kwargs: registry,
         reconcile_runner=reconcile,
         adspower_factory=lambda **_kwargs: object(),
-        healing_runtime_factory=lambda **_kwargs: Runtime(),
-        healing_runner=lambda _runtime: {
+        managed_runtime_factory=lambda **_kwargs: Runtime(),
+        managed_runner=lambda _runtime, *, publish, candidate: {
             "status": "healthy",
             "validation_evidence": _evidence(bundle),
         },

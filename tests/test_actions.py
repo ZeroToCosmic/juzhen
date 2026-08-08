@@ -49,6 +49,19 @@ def test_legacy_strategy_executor_is_not_exposed():
     assert not hasattr(browser_actions, "execute_strategy")
 
 
+def test_get_viewport_prefers_live_inner_size_after_window_resize():
+    from actions_dom import get_viewport
+
+    class Page:
+        viewport_size = {"width": 1280, "height": 720}
+
+        async def evaluate(self, expression):
+            assert "window.innerWidth" in expression
+            return {"width": 640, "height": 900}
+
+    assert asyncio.run(get_viewport(Page())) == (640.0, 900.0)
+
+
 def test_generate_comment_prefers_keyword_rule():
     comment, is_ai = asyncio.run(
         generate_comment({"description": "A new iPhone camera test", "tags": ["tech"]})

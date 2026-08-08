@@ -129,6 +129,35 @@ def test_open_profiles_reuses_case_insensitive_active_response_shape():
     assert client.started == []
 
 
+def test_open_profiles_rejects_duplicate_cdp_endpoint():
+    class DuplicateEndpointAdsPower(FakeAdsPower):
+        def start_browser(self, profile_id):
+            self.started.append(profile_id)
+            return "ws://shared-browser/devtools/browser/shared"
+
+    client = DuplicateEndpointAdsPower()
+    events = []
+    manager = ProbeSessionManager(
+        client,
+        allowed_profile_ids=("profile-a", "profile-b"),
+        wait_for_cdp=lambda _url: True,
+        progress_sink=events.append,
+        sleep_fn=lambda _seconds: None,
+    )
+
+    with pytest.raises(RuntimeError) as caught:
+        manager.open_profiles(("profile-a", "profile-b"))
+
+    assert caught.value.code == "profile_cdp_collision"
+    assert any(
+        item["name"] == "profile_binding"
+        and item["status"] == "failed"
+        and item["failure_code"] == "profile_cdp_collision"
+        for item in events
+    )
+    assert "ws://" not in str(caught.value)
+
+
 def test_active_profile_without_cdp_is_polled_not_started():
     class DelayedActive(FakeAdsPower):
         def __init__(self):
@@ -413,6 +442,48 @@ def test_probe_uses_new_tab_and_closes_only_that_tab():
         assert owned.page.closed is True
         assert existing_page.closed is False
         assert results[0]["ok"] is True
+
+    asyncio.run(scenario())
+
+
+def test_probe_allows_one_page_per_profile_and_records_safe_binding():
+    async def scenario():
+        events = []
+        context = FakeContext()
+        playwright = FakePlaywright(FakeBrowser([context]))
+        manager = ProbeSessionManager(
+            FakeAdsPower(),
+            allowed_profile_ids=("profile-a", "profile-b"),
+            wait_for_cdp=lambda _url: True,
+            progress_sink=events.append,
+            sleep_fn=lambda _seconds: None,
+        )
+        profile = ProfileHandle(
+            "profile-a",
+            "***le-a",
+            "ws://profile-a",
+            False,
+        )
+
+        await manager.open_probe_page(playwright, profile)
+        with pytest.raises(RuntimeError) as caught:
+            await manager.open_probe_page(playwright, profile)
+
+        assert caught.value.code == "probe_page_duplicate"
+        assert context.new_page_calls == 1
+        binding = [
+            item for item in events
+            if item["name"] == "profile_page_binding"
+        ]
+        assert binding == [{
+            "name": "profile_page_binding",
+            "profile_mask": "***le-a",
+            "status": "passed",
+            "attempt_count": 1,
+            "failure_code": "",
+            "summary": "",
+        }]
+        assert "ws://" not in repr(binding)
 
     asyncio.run(scenario())
 

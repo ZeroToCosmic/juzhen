@@ -2,30 +2,30 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 import hashlib
 import hmac
 import inspect
 import json
+import logging
 import os
 from pathlib import Path
 import secrets
 import threading
 import time
+import traceback
 import uuid
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
 from flask import Blueprint, current_app, g, jsonify, request, send_file
-from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
-
 from browser_public_identity import mask_profile_id
 from gateway.auth_blueprint import allow_roles
-from selector_probe.catalog import ElementCatalog, ElementQuery
+from selector_probe.catalog import CREATE_FIELDS, ElementCatalog, ElementQuery
 from selector_probe.gates import StrategyGateService
-from selector_probe.discovery import merge_discovery_candidates
+from selector_probe.picker import PickerError, build_picker_service
 from selector_probe.registry import RedisSelectorRegistry
 from selector_probe.store import (
     ElementAlreadyExistsError,
@@ -46,7 +46,6 @@ from selector_probe.redaction import (
 )
 from selector_probe.view_models import (
     public_element_detail,
-    public_element_request,
     public_element_summary,
 )
 
@@ -54,9 +53,9 @@ from selector_probe.view_models import (
 DEFAULT_PAGE_LIMIT = 50
 MAX_PAGE_LIMIT = 200
 MANAGEMENT_PAGE_SIZES = frozenset({20, 50, 100})
-PREFLIGHT_TOKEN_MAX_AGE_SECONDS = 600
 RUN_NOW_TTL_SECONDS = 900
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+LOGGER = logging.getLogger("selector_probe.dispatcher")
 RELEASE_RUN_NOW_LUA = """
 if redis.call('GET', KEYS[1]) == ARGV[1] then
     return redis.call('DEL', KEYS[1])
@@ -114,16 +113,6 @@ def default_registry_factory() -> RedisSelectorRegistry:
     )
 
 
-def default_legacy_elements_provider() -> object:
-    from gateway.settings_store import load_settings
-
-    settings = load_settings()
-    browser = settings.get("browser", {})
-    if not isinstance(browser, Mapping):
-        return {}
-    return browser.get("action_elements", {})
-
-
 def default_status_config_provider() -> object:
     from gateway.settings_store import load_settings
     from selector_probe.config import normalize_probe_config
@@ -168,185 +157,6 @@ def default_webhook_test_dispatcher(payload: Mapping[str, object]) -> object:
         "status": "delivered",
         "delivery_id": delivery_id,
     }
-
-
-def default_settings_preflight_runner(
-    raw_settings: Mapping[str, object],
-    candidate: Mapping[str, object],
-) -> dict[str, str]:
-    import requests
-    from redis import Redis
-    from selector_probe.webhook import WebhookDispatcher
-
-    checks = {
-        "profiles": "failed",
-        "redis_aof": "failed",
-        "redis_eviction": "failed",
-        "model": "failed",
-        "webhook": "failed",
-    }
-    probe = raw_settings.get("selector_probe", {})
-    probe = probe if isinstance(probe, Mapping) else {}
-    profile_ids = [
-        item
-        for item in probe.get("test_profile_ids", [])
-        if isinstance(item, str) and item
-    ]
-    dedicated_ids = {
-        item
-        for item in probe.get("dedicated_test_profile_ids", [])
-        if isinstance(item, str) and item
-    }
-    adspower = raw_settings.get("adspower", {})
-    adspower = adspower if isinstance(adspower, Mapping) else {}
-    try:
-        from adspower import AdsPowerController
-
-        base_url = str(
-            adspower.get("base_url")
-            or "http://local.adspower.net:50325"
-        ).rstrip("/")
-        api_key = str(adspower.get("api_key") or "")
-        structurally_valid = (
-            len(profile_ids) >= 2
-            and len(set(profile_ids)) == len(profile_ids)
-            and dedicated_ids == set(profile_ids)
-        )
-        if not structurally_valid:
-            raise ValueError("dedicated profiles are invalid")
-        controller = AdsPowerController(
-            base_url=base_url,
-            api_key=api_key,
-            timeout=5,
-            max_retries=1,
-            retry_delay=0,
-        )
-        started_profiles: list[str] = []
-        try:
-            for profile_id in profile_ids:
-                # Track before starting so a partial AdsPower launch is still
-                # closed when the API raises before returning a CDP endpoint.
-                started_profiles.append(profile_id)
-                websocket_url = controller.start_browser(profile_id)
-                if not isinstance(websocket_url, str) or not websocket_url:
-                    raise RuntimeError("profile CDP is unavailable")
-            checks["profiles"] = "passed"
-        finally:
-            for profile_id in reversed(started_profiles):
-                try:
-                    controller.stop_browser(profile_id)
-                except Exception:
-                    checks["profiles"] = "failed"
-    except Exception:
-        pass
-    redis_config = probe.get("redis", {})
-    redis_config = (
-        redis_config if isinstance(redis_config, Mapping) else {}
-    )
-    redis_url = str(
-        redis_config.get("url")
-        or os.getenv("CELERY_BROKER_URL", "")
-        or "redis://127.0.0.1:6379/0"
-    )
-    redis_client = None
-    try:
-        redis_client = Redis.from_url(
-            redis_url,
-            password=str(redis_config.get("password") or "") or None,
-            socket_connect_timeout=3,
-            socket_timeout=5,
-        )
-        if redis_client.ping() is True:
-            persistence = redis_client.info("persistence")
-            aof_enabled = persistence.get("aof_enabled")
-            if aof_enabled in {1, "1", True}:
-                checks["redis_aof"] = "passed"
-            policy = redis_client.config_get("maxmemory-policy").get(
-                "maxmemory-policy"
-            )
-            if policy == "noeviction":
-                checks["redis_eviction"] = "passed"
-    except Exception:
-        pass
-    finally:
-        if redis_client is not None:
-            try:
-                redis_client.close()
-            except Exception:
-                pass
-    models = raw_settings.get("models", {})
-    models = models if isinstance(models, Mapping) else {}
-    model_id = str(probe.get("model_id") or "")
-    model = next(
-        (
-            item
-            for item in models.get("items", [])
-            if isinstance(item, Mapping)
-            and item.get("id") == model_id
-            and item.get("enabled", True) is True
-        ),
-        None,
-    )
-    try:
-        if not isinstance(model, Mapping):
-            raise ValueError("model is unavailable")
-        base_url = _request_text(
-            model.get("base_url"), "model_base_url", maximum=1000
-        ).rstrip("/")
-        api_key = _request_text(
-            model.get("api_key"), "model_api_key", maximum=4000
-        )
-        response = requests.get(
-            f"{base_url}/models",
-            headers={"Authorization": f"Bearer {api_key}"},
-            timeout=5,
-        )
-        response.raise_for_status()
-        checks["model"] = "passed"
-    except Exception:
-        pass
-    webhook = probe.get("webhook", {})
-    webhook = webhook if isinstance(webhook, Mapping) else {}
-    if webhook.get("enabled") is True:
-        try:
-            webhook_url = _request_text(
-                webhook.get("url"), "webhook_url", maximum=2000
-            )
-            WebhookDispatcher(
-                url=webhook_url,
-                signing_secret=str(
-                    webhook.get("signing_secret") or ""
-                ),
-                webhook_type=str(webhook.get("type") or "generic"),
-            ).send(
-                {
-                    "event": "selector_probe.webhook_test",
-                    "environment": candidate.get("environment"),
-                    "site": candidate.get("site"),
-                    "synthetic": True,
-                },
-                idempotency_key=(
-                    "selector-probe-preflight-"
-                    + _settings_candidate_fingerprint(candidate)[:32]
-                ),
-            )
-            checks["webhook"] = "passed"
-        except Exception:
-            pass
-    return checks
-
-
-def default_element_request_dispatcher(
-    request_id: str,
-    *,
-    store_factory=default_store_factory,
-) -> object:
-    from selector_probe.worker import wake_element_request_worker
-
-    return wake_element_request_worker(
-        request_id,
-        store_factory=lambda _path: store_factory(),
-    )
 
 
 def _close_resources_independently(resources: Sequence[object]) -> None:
@@ -420,6 +230,65 @@ def _dispatcher_redis_client() -> object:
     )
 
 
+def _dispatch_failure_code(error: BaseException) -> str:
+    explicit = _safe_code_text(
+        getattr(error, "code", None),
+        maximum=64,
+    )
+    if (
+        explicit
+        and "a" <= explicit[0] <= "z"
+        and all(
+            "a" <= character <= "z"
+            or character.isdigit()
+            or character == "_"
+            for character in explicit
+        )
+    ):
+        return explicit
+    return {
+        "OperationalError": "probe_store_unavailable",
+        "ConnectionError": "probe_dependency_unavailable",
+        "TimeoutError": "probe_dispatch_timeout",
+    }.get(type(error).__name__, "probe_dispatch_failed")
+
+
+def _emit_dispatch_diagnostic(
+    sink: Callable[[Mapping[str, object]], None] | None,
+    *,
+    request_id: str,
+    failure_code: str,
+    error: BaseException,
+) -> None:
+    payload = {
+        "request_id": request_id,
+        "failure_code": failure_code,
+        "exception_type": type(error).__name__,
+        "stack": [
+            {
+                "file": frame.filename,
+                "line": frame.lineno,
+                "function": frame.name,
+            }
+            for frame in traceback.extract_tb(error.__traceback__)[-12:]
+        ],
+    }
+    try:
+        if callable(sink):
+            sink(payload)
+        else:
+            LOGGER.error(
+                "selector_probe_run_now_failed diagnostic=%s",
+                json.dumps(
+                    payload,
+                    ensure_ascii=True,
+                    separators=(",", ":"),
+                ),
+            )
+    except Exception:
+        return
+
+
 class RedisRunDispatcher:
     def __init__(
         self,
@@ -432,6 +301,7 @@ class RedisRunDispatcher:
         heartbeat_seconds: float | None = None,
         namespace: str = "selector_registry",
         terminal_callback=None,
+        diagnostic_sink: Callable[[Mapping[str, object]], None] | None = None,
     ) -> None:
         if (
             not isinstance(ttl_seconds, int)
@@ -466,6 +336,9 @@ class RedisRunDispatcher:
             raise ValueError("run-now heartbeat must be below TTL")
         self.heartbeat_seconds = float(interval)
         self.terminal_callback = terminal_callback
+        if diagnostic_sink is not None and not callable(diagnostic_sink):
+            raise TypeError("diagnostic_sink must be callable")
+        self.diagnostic_sink = diagnostic_sink
 
     def _release(self, redis_client: object, owner: str) -> None:
         try:
@@ -575,10 +448,13 @@ class RedisRunDispatcher:
                     kwargs["management_request_id"] = request_id
                 result = self.tick_runner(**kwargs)
             except BaseException as error:
-                failure_code = _safe_code_text(
-                    getattr(error, "code", None),
-                    maximum=128,
-                ) or "probe_unavailable"
+                failure_code = _dispatch_failure_code(error)
+                _emit_dispatch_diagnostic(
+                    self.diagnostic_sink,
+                    request_id=request_id,
+                    failure_code=failure_code,
+                    error=error,
+                )
             finally:
                 heartbeat_stop.set()
                 heartbeat.join(min(self.heartbeat_seconds + 0.5, 2.0))
@@ -1190,7 +1066,6 @@ def _management_project_run(value: object) -> dict[str, object]:
                     "element_id",
                     "status",
                     "failure_class",
-                    "repair_attempt_count",
                 ),
             ),
             "rounds": _project_records(
@@ -1201,19 +1076,6 @@ def _management_project_run(value: object) -> dict[str, object]:
                     "status",
                     "match_count",
                     "failure_code",
-                ),
-            ),
-            "repairs": _project_records(
-                details.get("repairs"),
-                (
-                    "attempt",
-                    "previous_method",
-                    "new_method",
-                    "failure_code",
-                    "match_count",
-                    "validation_result",
-                    "prompt_version",
-                    "model_id",
                 ),
             ),
             "publication": _safe_operation_state(
@@ -1261,11 +1123,6 @@ def _management_project_run(value: object) -> dict[str, object]:
                 "finished_at",
             ),
         )
-        result["discoveries"] = merge_discovery_candidates(
-            [item for item in validations if isinstance(item, Mapping)]
-        )
-    else:
-        result["discoveries"] = []
     return result
 
 
@@ -1300,17 +1157,6 @@ def _management_project_version(value: object) -> dict[str, object]:
                             "failure_code",
                         ),
                         limit=40,
-                    ),
-                    "repairs": _project_records(
-                        evidence.get("repairs"),
-                        (
-                            "attempt",
-                            "failure_code",
-                            "validation_result",
-                            "model_id",
-                            "prompt_version",
-                        ),
-                        limit=20,
                     ),
                 }
             ),
@@ -1350,29 +1196,18 @@ def _management_project_alert(value: object) -> dict[str, object]:
         "active_version": (
             _safe_code_text(value.get("active_version")) or ""
         ),
-            "repairs": _project_records(
-                details.get("repairs"),
-                (
-                    "attempt",
-                    "failure_code",
-                    "validation_result",
-                    "model_id",
-                    "prompt_version",
-                ),
-                limit=20,
+        "retries": _project_records(
+            details.get("retries"),
+            (
+                "attempt",
+                "status",
+                "failure_code",
+                "started_at",
+                "finished_at",
             ),
-            "retries": _project_records(
-                details.get("retries"),
-                (
-                    "attempt",
-                    "status",
-                    "failure_code",
-                    "started_at",
-                    "finished_at",
-                ),
-                limit=20,
-            ),
-            "webhook": _safe_operation_state(details.get("webhook")),
+            limit=20,
+        ),
+        "webhook": _safe_operation_state(details.get("webhook")),
         "gate_active": bool(
             value.get(
                 "gate_active",
@@ -1461,55 +1296,6 @@ def _operation_payload_hash(payload: Mapping[str, object]) -> str:
     return "sha256:" + _candidate_fingerprint(payload)
 
 
-def _settings_candidate_fingerprint(
-    candidate: Mapping[str, object],
-) -> str:
-    profiles = candidate.get("profiles", [])
-    payload = {
-        key: candidate.get(key)
-        for key in (
-            "enabled",
-            "rollout_mode",
-            "schedule_time",
-            "timezone",
-            "target_origin",
-            "freshness_hours",
-            "retry_policy",
-        )
-    }
-    payload["profiles"] = [
-        {
-            "profile_ref": item.get("profile_ref"),
-            "dedicated_test": item.get("dedicated_test"),
-        }
-        for item in profiles
-        if isinstance(item, Mapping)
-    ]
-    model = candidate.get("model", {})
-    redis_value = candidate.get("redis", {})
-    webhook = candidate.get("webhook", {})
-    payload["model"] = {
-        "id": model.get("id") if isinstance(model, Mapping) else ""
-    }
-    payload["redis"] = {
-        "namespace": (
-            redis_value.get("namespace")
-            if isinstance(redis_value, Mapping)
-            else ""
-        )
-    }
-    payload["webhook"] = {
-        key: webhook.get(key)
-        for key in (
-            "enabled",
-            "type",
-            "timeout_seconds",
-            "retry_policy",
-        )
-    } if isinstance(webhook, Mapping) else {}
-    return _candidate_fingerprint(payload)
-
-
 def _settings_publication_fingerprint(
     candidate: Mapping[str, object],
 ) -> str:
@@ -1521,12 +1307,12 @@ def _settings_publication_fingerprint(
             "schedule_time",
             "timezone",
             "target_origin",
+            "page_timeout_seconds",
             "freshness_hours",
             "site",
             "environment",
             "retry_policy",
             "profiles",
-            "model",
             "redis",
             "webhook",
         )
@@ -1539,7 +1325,7 @@ def _settings_private_reference(
 ) -> str:
     private_candidate = {
         key: raw_settings.get(key)
-        for key in ("selector_probe", "models", "adspower")
+        for key in ("selector_probe", "adspower")
     }
     encoded = json.dumps(
         private_candidate,
@@ -1588,17 +1374,6 @@ def _selector_settings_projection(
     profile_health = (
         profile_health if isinstance(profile_health, Mapping) else {}
     )
-    models = settings.get("models", {})
-    models = models if isinstance(models, Mapping) else {}
-    model_id = str(probe.get("model_id") or models.get("default_model_id") or "")
-    model = next(
-        (
-            item
-            for item in models.get("items", [])
-            if isinstance(item, Mapping) and item.get("id") == model_id
-        ),
-        {},
-    )
     webhook = probe.get("webhook", {})
     webhook = webhook if isinstance(webhook, Mapping) else {}
     redis_config = probe.get("redis", {})
@@ -1610,9 +1385,14 @@ def _selector_settings_projection(
         "revision": revision,
         "enabled": bool(probe.get("enabled", False)),
         "rollout_mode": mode,
-        "schedule_time": str(probe.get("daily_time") or "03:00"),
+        "schedule_time": str(probe.get("schedule_time") or "03:00"),
         "timezone": str(probe.get("timezone") or "Asia/Shanghai"),
-        "target_origin": str(probe.get("target_url") or ""),
+        "target_origin": str(
+            probe.get("target_origin") or "https://www.tiktok.com"
+        ),
+        "page_timeout_seconds": int(
+            probe.get("page_timeout_seconds") or 90
+        ),
         "freshness_hours": int(probe.get("freshness_hours") or 36),
         "site": str(probe.get("site") or "tiktok"),
         "environment": str(probe.get("environment") or "production"),
@@ -1634,13 +1414,6 @@ def _selector_settings_projection(
             for item in profile_ids
             if isinstance(item, str) and item
         ],
-        "model": {
-            "id": model_id,
-            "provider": str(model.get("provider") or ""),
-            "mode": str(model.get("mode") or ""),
-            "status": "passed" if model_id and model.get("enabled", True) else "failed",
-            "api_key_set": bool(model.get("api_key")),
-        },
         "redis": {
             "status": str(redis_config.get("status") or "unknown"),
             "namespace": str(
@@ -1664,52 +1437,6 @@ def _selector_settings_projection(
     }
 
 
-def _settings_checks(candidate: Mapping[str, object]) -> dict[str, str]:
-    profiles = candidate.get("profiles", [])
-    valid_profiles = (
-        isinstance(profiles, Sequence)
-        and not isinstance(profiles, (str, bytes, bytearray))
-        and len(profiles) >= 2
-        and all(
-            isinstance(item, Mapping)
-            and isinstance(item.get("profile_ref"), str)
-            and item.get("profile_ref")
-            and item.get("dedicated_test") is True
-            and item.get("status") == "healthy"
-            for item in profiles
-        )
-    )
-    redis_value = candidate.get("redis", {})
-    redis_value = redis_value if isinstance(redis_value, Mapping) else {}
-    model = candidate.get("model", {})
-    model = model if isinstance(model, Mapping) else {}
-    webhook = candidate.get("webhook", {})
-    webhook = webhook if isinstance(webhook, Mapping) else {}
-    return {
-        "profiles": "passed" if valid_profiles else "failed",
-        "redis_aof": "passed" if redis_value.get("aof_enabled") is True else "failed",
-        "redis_eviction": (
-            "passed"
-            if redis_value.get("eviction_policy") == "noeviction"
-            else "failed"
-        ),
-        "model": (
-            "passed"
-            if model.get("id") and model.get("status") == "passed"
-            else "failed"
-        ),
-        "webhook": (
-            "passed"
-            if (
-                webhook.get("enabled") is True
-                and webhook.get("url_display")
-                and webhook.get("status") == "passed"
-            )
-            else "failed"
-        ),
-    }
-
-
 def _element_query() -> ElementQuery:
     try:
         page = int(request.args.get("page", "1"))
@@ -1721,8 +1448,6 @@ def _element_query() -> ElementQuery:
         page_size=page_size,
         search=request.args.get("search", ""),
         status=request.args.get("status", "all"),
-        source=request.args.get("source", "all"),
-        scope=request.args.get("scope", "all"),
         referenced=request.args.get("referenced", "all"),
     )
 
@@ -1734,58 +1459,22 @@ def _actor_identity() -> tuple[int, str]:
 def _element_detail_payload(
     catalog: ElementCatalog,
     record: object,
-    *,
-    active_definition: object = None,
 ) -> dict[str, object]:
-    draft = catalog.draft(record.id)
+    definition = catalog.draft(record.id)
     dependencies = catalog.dependencies(record.id)
-    validation = draft["validation"] if draft is not None else {}
-    draft_candidates = draft["candidates"] if draft is not None else []
-    repairs = (
-        validation.get("repairs", [])
-        if isinstance(validation, Mapping)
-        else []
-    )
-    active_locators = (
-        active_definition.get("locators", [])
-        if isinstance(active_definition, Mapping)
-        else []
-    )
-    has_repairs = (
-        isinstance(repairs, Sequence)
-        and not isinstance(repairs, (str, bytes, bytearray))
-        and bool(repairs)
-    )
-    comparison = {
-        "active": active_locators,
-        "deterministic": [] if has_repairs else draft_candidates,
-        "repaired": draft_candidates if has_repairs else [],
-    }
-    payload = public_element_detail(
+    return public_element_detail(
         record,
-        validation,
+        definition,
         dependencies,
-        candidate_comparison=comparison,
-        repairs=repairs,
+        validation={},
         history=catalog.history(record.id),
+        alerts=[],
+        strategy_controls={
+            "can_rename": True,
+            "can_rebind": True,
+            "can_delete": not dependencies,
+        },
     )
-    payload["contract"] = draft["contract"] if draft is not None else None
-    payload["candidates"] = (
-        [
-            projected
-            for item in (active_locators or draft_candidates)
-            if (projected := _public_locator(item))
-        ]
-        if active_locators or draft is not None
-        else []
-    )
-    payload["draft_revision"] = (
-        draft["revision"] if draft is not None else None
-    )
-    payload["base_version_id"] = (
-        draft["base_version_id"] if draft is not None else ""
-    )
-    return payload
 
 
 def _element_error(error: BaseException):
@@ -1935,8 +1624,6 @@ def _public_version(value: object) -> dict[str, object]:
         "status",
         "base_version_id",
         "bundle_hash",
-        "model_id",
-        "prompt_version",
     ):
         item = _safe_code_text(value.get(key))
         if item is not None:
@@ -1980,8 +1667,7 @@ def _sqlite_history(
         rows = connection.execute(
             """
             SELECT id, site, environment, status, base_version_id,
-                   bundle_hash, model_id, prompt_version, created_at,
-                   validated_at, published_at
+                   bundle_hash, created_at, validated_at, published_at
             FROM selector_versions
             ORDER BY created_at DESC, id DESC
             LIMIT ? OFFSET ?
@@ -2300,13 +1986,11 @@ def create_selector_probe_blueprint(
     registry_factory=default_registry_factory,
     gate_service_factory=default_gate_service_factory,
     run_dispatcher=default_run_dispatcher,
-    element_request_dispatcher=None,
-    legacy_elements_provider=default_legacy_elements_provider,
     status_config_provider=default_status_config_provider,
     settings_provider=default_settings_provider,
     settings_mutator=default_settings_mutator,
-    settings_preflight_runner=default_settings_preflight_runner,
     webhook_test_dispatcher=default_webhook_test_dispatcher,
+    picker_service_factory=None,
     evidence_root=DEFAULT_EVIDENCE_ROOT,
     utcnow_fn=lambda: datetime.now(UTC),
     monotonic_fn=time.monotonic,
@@ -2317,12 +2001,57 @@ def create_selector_probe_blueprint(
     run_owner = ""
     run_busy_until = 0.0
     settings_lock = threading.Lock()
-    request_waker = element_request_dispatcher or (
-        lambda request_id: default_element_request_dispatcher(
-            request_id,
-            store_factory=store_factory,
-        )
-    )
+    picker_lock = threading.Lock()
+    picker_service_instance = None
+    def picker_service():
+        nonlocal picker_service_instance
+        if picker_service_instance is not None:
+            return picker_service_instance
+        with picker_lock:
+            if picker_service_instance is None:
+                picker_service_instance = (
+                    picker_service_factory()
+                    if callable(picker_service_factory)
+                    else build_picker_service(
+                        settings=settings_provider(),
+                        redis_client=_dispatcher_redis_client(),
+                    )
+                )
+        return picker_service_instance
+
+    def picker_profile(
+        profile_ref: str,
+    ) -> tuple[str, str, Mapping[str, object]]:
+        settings = settings_provider()
+        if not isinstance(settings, Mapping):
+            raise PickerError("picker_settings_unavailable", 503)
+        probe = settings.get("selector_probe")
+        probe = probe if isinstance(probe, Mapping) else {}
+        profile_ids = [
+            item
+            for item in probe.get("test_profile_ids", [])
+            if isinstance(item, str) and item
+        ]
+        dedicated = {
+            item
+            for item in probe.get("dedicated_test_profile_ids", [])
+            if isinstance(item, str) and item
+        }
+        by_ref = {_profile_ref(item): item for item in profile_ids}
+        profile_id = by_ref.get(profile_ref)
+        if not profile_id or profile_id not in dedicated:
+            raise PickerError("unknown_picker_profile", 404)
+        return profile_id, mask_profile_id(profile_id), settings
+
+    def picker_error(error: BaseException):
+        if isinstance(error, PickerError):
+            return jsonify({"code": error.code}), error.status_code
+        if isinstance(error, ValueError) and str(error) in {
+            "invalid_request",
+            "invalid_expected_revision",
+        }:
+            return jsonify({"code": str(error)}), 400
+        return jsonify({"code": "picker_unavailable"}), 503
 
     def active_bundle() -> dict[str, object] | None:
         registry = registry_factory()
@@ -2338,7 +2067,6 @@ def create_selector_probe_blueprint(
             catalog_config = None
         return ElementCatalog(
             store,
-            legacy_elements_provider=legacy_elements_provider,
             site=getattr(catalog_config, "site", "tiktok"),
             environment=getattr(
                 catalog_config,
@@ -2425,12 +2153,18 @@ def create_selector_probe_blueprint(
     @blueprint.post("/api/selector-probe/elements")
     @allow_roles("administrator")
     def create_element_route():
+        request_payload = request.get_json(silent=True)
+        if (
+            not isinstance(request_payload, Mapping)
+            or set(request_payload) != CREATE_FIELDS
+        ):
+            return jsonify({"code": "invalid_element_payload"}), 400
         try:
             actor_user_id, actor_username = _actor_identity()
             with _open_store(store_factory) as store:
                 catalog = open_catalog(store)
                 record = catalog.create_draft(
-                    request.get_json(silent=True),
+                    request_payload,
                     actor_user_id,
                     actor_username,
                 )
@@ -2448,47 +2182,48 @@ def create_selector_probe_blueprint(
                 record = catalog.get(element_id)
                 if record is None:
                     raise ElementNotFoundError(element_id)
-                try:
-                    active = active_bundle()
-                except Exception:
-                    active = None
-                active_definition = (
-                    active.get("elements", {}).get(record.id)
-                    if isinstance(active, Mapping)
-                    and isinstance(active.get("elements"), Mapping)
-                    else None
-                )
-                payload = _element_detail_payload(
-                    catalog,
-                    record,
-                    active_definition=active_definition,
-                )
+                payload = _element_detail_payload(catalog, record)
         except Exception as error:
             return _element_error(error)
         return jsonify(payload)
 
     @blueprint.patch(
-        "/api/selector-probe/elements/<element_id>/draft"
+        "/api/selector-probe/elements/<element_id>"
     )
     @allow_roles("administrator")
-    def update_element_draft_route(element_id: str):
+    def update_element_route(element_id: str):
         payload = request.get_json(silent=True)
-        if (
-            not isinstance(payload, Mapping)
-            or set(payload) != {"expected_revision", "contract"}
-        ):
+        if not isinstance(payload, Mapping):
+            return jsonify({"code": "invalid_element_request"}), 400
+        operation = payload.get("operation")
+        expected_fields = {
+            "rename": {"operation", "display_name", "expected_revision"},
+            "rebind": {"operation", "definition", "expected_revision"},
+        }.get(operation)
+        if expected_fields is None:
+            return jsonify({"code": "invalid_element_operation"}), 400
+        if set(payload) != expected_fields:
             return jsonify({"code": "invalid_element_request"}), 400
         try:
             actor_user_id, actor_username = _actor_identity()
             with _open_store(store_factory) as store:
                 catalog = open_catalog(store)
-                record = catalog.update_draft(
-                    element_id,
-                    {"contract": payload["contract"]},
-                    payload["expected_revision"],
-                    actor_user_id,
-                    actor_username,
-                )
+                if operation == "rename":
+                    record = catalog.update_name(
+                        element_id,
+                        payload["display_name"],
+                        payload["expected_revision"],
+                        actor_user_id,
+                        actor_username,
+                    )
+                else:
+                    record = catalog.rebind(
+                        element_id,
+                        payload["definition"],
+                        payload["expected_revision"],
+                        actor_user_id,
+                        actor_username,
+                    )
                 result = _element_detail_payload(catalog, record)
         except Exception as error:
             return _element_error(error)
@@ -2514,100 +2249,6 @@ def create_selector_probe_blueprint(
         except Exception as error:
             return _element_error(error)
         return "", 204
-
-    def dispatch_element(element_id: str, *, request_type: str):
-        payload = request.get_json(silent=True)
-        if not isinstance(payload, Mapping) or set(payload) != {
-            "expected_revision"
-        }:
-            return jsonify({"code": "invalid_element_request"}), 400
-        try:
-            actor_user_id, actor_username = _actor_identity()
-            with _open_store(store_factory) as store:
-                catalog = open_catalog(store)
-                record = catalog.require_revision(
-                    element_id,
-                    payload["expected_revision"],
-                )
-                request_id = uuid.uuid4().hex
-                accepted = store.reserve_element_request(
-                    element_id=record.id,
-                    request_type=request_type,
-                    request_id=request_id,
-                    expected_revision=record.revision,
-                    actor_user_id=actor_user_id,
-                    actor_username=actor_username,
-                )
-        except Exception as error:
-            return _element_error(error)
-        try:
-            request_waker(str(accepted["request_id"]))
-        except Exception:
-            pass
-        return jsonify(
-            {
-                "status": "accepted",
-                "request_id": accepted["request_id"],
-                "element_id": accepted["element_id"],
-                "request_type": accepted["request_type"],
-                "expected_revision": accepted["expected_revision"],
-            }
-        ), 202
-
-    @blueprint.post(
-        "/api/selector-probe/elements/<element_id>/probe"
-    )
-    @allow_roles("administrator", "operator")
-    def probe_element_route(element_id: str):
-        return dispatch_element(element_id, request_type="probe")
-
-    @blueprint.post(
-        "/api/selector-probe/elements/<element_id>/validate"
-    )
-    @allow_roles("administrator")
-    def validate_element_route(element_id: str):
-        return dispatch_element(element_id, request_type="validate")
-
-    @blueprint.post(
-        "/api/selector-probe/elements/<element_id>/migrate"
-    )
-    @allow_roles("administrator")
-    def migrate_element_route(element_id: str):
-        payload = request.get_json(silent=True)
-        if not isinstance(payload, Mapping) or set(payload) != {
-            "expected_revision"
-        }:
-            return jsonify({"code": "invalid_element_request"}), 400
-        try:
-            actor_user_id, actor_username = _actor_identity()
-            with _open_store(store_factory) as store:
-                catalog = open_catalog(store)
-                record = catalog.create_legacy_migration(
-                    element_id,
-                    actor_user_id,
-                    actor_username,
-                    expected_revision=payload["expected_revision"],
-                )
-                result = _element_detail_payload(catalog, record)
-        except Exception as error:
-            return _element_error(error)
-        return jsonify(result)
-
-    @blueprint.get(
-        "/api/selector-probe/element-requests/<request_id>"
-    )
-    @allow_roles("administrator", "operator")
-    def element_request_route(request_id: str):
-        try:
-            with _open_store(store_factory) as store:
-                element_request = store.get_element_request(request_id)
-            if element_request is None:
-                return jsonify({"code": "element_request_not_found"}), 404
-            return jsonify(public_element_request(element_request))
-        except ValueError:
-            return jsonify({"code": "invalid_element_request"}), 400
-        except Exception:
-            return jsonify({"code": "element_service_unavailable"}), 503
 
     @blueprint.get("/api/selector-probe/status")
     def status_route():
@@ -3314,11 +2955,14 @@ def create_selector_probe_blueprint(
         if not isinstance(probe, dict):
             probe = {}
             updated["selector_probe"] = probe
+        for obsolete_key in ("daily_time", "target_url"):
+            probe.pop(obsolete_key, None)
         scalar_map = {
             "enabled": "enabled",
-            "schedule_time": "daily_time",
+            "schedule_time": "schedule_time",
             "timezone": "timezone",
-            "target_origin": "target_url",
+            "target_origin": "target_origin",
+            "page_timeout_seconds": "page_timeout_seconds",
             "freshness_hours": "freshness_hours",
             "retry_policy": "retry_policy",
         }
@@ -3401,11 +3045,6 @@ def create_selector_probe_blueprint(
         probe["dedicated_test_profile_ids"] = [
             item for item in current_ids if item in dedicated_ids
         ]
-        model = payload.get("model")
-        if isinstance(model, Mapping) and "id" in model:
-            probe["model_id"] = _request_text(
-                model["id"], "model_id", maximum=128
-            )
         redis_public = payload.get("redis")
         if isinstance(redis_public, Mapping):
             redis_private = probe.setdefault("redis", {})
@@ -3438,35 +3077,18 @@ def create_selector_probe_blueprint(
             else {}
         )
         allowed_secrets = {
-            "model_api_key",
             "redis_password",
             "webhook_signing_secret",
             "webhook_url",
         }
         if not set(secret_values).issubset(allowed_secrets):
             raise ValueError("invalid secret")
-        selected_model_id = str(probe.get("model_id") or "")
         for name, value in secret_values.items():
             if not isinstance(value, str):
                 raise ValueError("invalid secret")
             if not value:
                 continue
-            if name == "model_api_key":
-                models = updated.setdefault("models", {})
-                items = models.get("items", []) if isinstance(models, dict) else []
-                target = next(
-                    (
-                        item
-                        for item in items
-                        if isinstance(item, dict)
-                        and item.get("id") == selected_model_id
-                    ),
-                    None,
-                )
-                if target is None:
-                    raise ValueError("unknown model")
-                target["api_key"] = value
-            elif name == "redis_password":
+            if name == "redis_password":
                 probe.setdefault("redis", {})["password"] = value
             elif name == "webhook_signing_secret":
                 probe.setdefault("webhook", {})[
@@ -3523,104 +3145,6 @@ def create_selector_probe_blueprint(
                     now=utcnow_fn(),
                 )
 
-    def settings_revision() -> int:
-        raw_settings = settings_provider()
-        with _open_store(store_factory) as store:
-            reconcile_settings_publications(store, raw_settings)
-            return store.current_revision("settings")
-
-    def run_preflight(
-        raw_settings: Mapping[str, object],
-        candidate: Mapping[str, object],
-    ) -> dict[str, str]:
-        checks = _settings_checks(candidate)
-        if settings_preflight_runner is None:
-            return {
-                name: "failed"
-                for name in checks
-            }
-        try:
-            parameter_count = len(
-                inspect.signature(settings_preflight_runner).parameters
-            )
-        except (TypeError, ValueError):
-            parameter_count = 2
-        custom = (
-            settings_preflight_runner(raw_settings, candidate)
-            if parameter_count >= 2
-            else settings_preflight_runner(candidate)
-        )
-        if isinstance(custom, Mapping):
-            for name in checks:
-                if custom.get(name) in {"passed", "failed"}:
-                    checks[name] = str(custom[name])
-                else:
-                    checks[name] = "failed"
-        else:
-            checks = {name: "failed" for name in checks}
-        profiles = candidate.get("profiles", [])
-        if (
-            not isinstance(profiles, Sequence)
-            or isinstance(profiles, (str, bytes, bytearray))
-            or len(profiles) < 2
-            or len(
-                {
-                    item.get("profile_ref")
-                    for item in profiles
-                    if isinstance(item, Mapping)
-                }
-            )
-            != len(profiles)
-            or not all(
-                isinstance(item, Mapping)
-                and item.get("dedicated_test") is True
-                for item in profiles
-            )
-        ):
-            checks["profiles"] = "failed"
-        webhook_value = candidate.get("webhook", {})
-        if (
-            not isinstance(webhook_value, Mapping)
-            or webhook_value.get("enabled") is not True
-        ):
-            checks["webhook"] = "failed"
-        if isinstance(candidate, dict):
-            if checks["profiles"] == "passed":
-                for item in candidate.get("profiles", []):
-                    if isinstance(item, dict):
-                        item["status"] = "healthy"
-            model = candidate.get("model")
-            if isinstance(model, dict):
-                model["status"] = (
-                    "passed"
-                    if checks["model"] == "passed"
-                    else "failed"
-                )
-            redis_value = candidate.get("redis")
-            if isinstance(redis_value, dict):
-                redis_value["aof_enabled"] = (
-                    checks["redis_aof"] == "passed"
-                )
-                redis_value["eviction_policy"] = (
-                    "noeviction"
-                    if checks["redis_eviction"] == "passed"
-                    else ""
-                )
-                redis_value["status"] = (
-                    "healthy"
-                    if checks["redis_aof"] == "passed"
-                    and checks["redis_eviction"] == "passed"
-                    else "failed"
-                )
-            webhook = candidate.get("webhook")
-            if isinstance(webhook, dict):
-                webhook["status"] = (
-                    "passed"
-                    if checks["webhook"] == "passed"
-                    else "failed"
-                )
-        return checks
-
     def registry_lease_active() -> bool:
         registry = registry_factory()
         try:
@@ -3633,103 +3157,18 @@ def create_selector_probe_blueprint(
         finally:
             _close_registry(registry)
 
-    def apply_preflight_health(
-        projected: dict[str, object],
-        health: object,
-    ) -> dict[str, object]:
-        if not isinstance(health, Mapping):
-            return projected
-        profiles = health.get("profiles", [])
-        by_ref = {
-            str(item.get("profile_ref")): item
-            for item in profiles
-            if isinstance(item, Mapping) and item.get("profile_ref")
-        }
-        for item in projected.get("profiles", []):
-            if not isinstance(item, dict):
-                continue
-            trusted = by_ref.get(str(item.get("profile_ref")))
-            if (
-                isinstance(trusted, Mapping)
-                and trusted.get("dedicated_test")
-                == item.get("dedicated_test")
-            ):
-                item["status"] = str(
-                    trusted.get("status") or "unknown"
-                )
-        checks = health.get("checks", {})
-        if isinstance(checks, Mapping):
-            model = projected.get("model")
-            redis_value = projected.get("redis")
-            webhook = projected.get("webhook")
-            if isinstance(model, dict):
-                model["status"] = (
-                    "passed"
-                    if checks.get("model") == "passed"
-                    else "failed"
-                )
-            if isinstance(redis_value, dict):
-                redis_value["aof_enabled"] = (
-                    checks.get("redis_aof") == "passed"
-                )
-                redis_value["eviction_policy"] = (
-                    "noeviction"
-                    if checks.get("redis_eviction") == "passed"
-                    else ""
-                )
-                redis_value["status"] = (
-                    "healthy"
-                    if checks.get("redis_aof") == "passed"
-                    and checks.get("redis_eviction") == "passed"
-                    else "failed"
-                )
-            if isinstance(webhook, dict):
-                webhook["status"] = (
-                    "passed"
-                    if checks.get("webhook") == "passed"
-                    else "failed"
-                )
-        return projected
-
-    def projected_settings_with_health() -> dict[str, object]:
+    def projected_settings() -> dict[str, object]:
         raw = settings_provider()
         with _open_store(store_factory) as store:
             reconcile_settings_publications(store, raw)
             revision = store.current_revision("settings")
-            projected = _selector_settings_projection(
-                raw, revision=revision
-            )
-            workspace = (
-                f"{projected['site']}:{projected['environment']}"
-            )
-            health = store.management_preflight_health(workspace)
-        if isinstance(health, Mapping):
-            try:
-                checked_at = datetime.fromisoformat(
-                    str(health.get("checked_at") or "").replace(
-                        "Z", "+00:00"
-                    )
-                )
-            except ValueError:
-                health = None
-            else:
-                if (
-                    health.get("base_revision") != revision
-                    or health.get("canonical_fingerprint")
-                    != _settings_candidate_fingerprint(projected)
-                    or utcnow_fn().astimezone(UTC) - checked_at
-                    > timedelta(
-                        seconds=PREFLIGHT_TOKEN_MAX_AGE_SECONDS
-                    )
-                ):
-                    health = None
-        return apply_preflight_health(projected, health)
+        return _selector_settings_projection(raw, revision=revision)
 
     @blueprint.get("/api/selector-probe/settings")
     @allow_roles("administrator", "operator")
     def settings_route():
         try:
-            return jsonify(projected_settings_with_health())
+            return jsonify(projected_settings())
         except Exception:
             return jsonify({"code": "settings_unavailable"}), 503
 
@@ -3737,7 +3176,7 @@ def create_selector_probe_blueprint(
     @allow_roles("administrator", "operator")
     def settings_profiles_route():
         try:
-            projected = projected_settings_with_health()
+            projected = projected_settings()
             return jsonify(
                 {
                     "items": projected["profiles"],
@@ -3747,88 +3186,107 @@ def create_selector_probe_blueprint(
         except Exception:
             return jsonify({"code": "settings_unavailable"}), 503
 
-    @blueprint.post("/api/selector-probe/settings/preflight")
+    @blueprint.post("/api/selector-probe/picker/start")
     @allow_roles("administrator")
-    def settings_preflight_route():
+    def picker_start_route():
         try:
             payload = _strict_object(
                 request.get_json(silent=True),
-                required={"expected_revision", "settings"},
-                optional={"candidate_fingerprint"},
+                required={"profile_ref", "page_state"},
             )
-            expected = _request_revision(payload["expected_revision"])
-            client_fingerprint = (
-                _request_text(
-                    payload["candidate_fingerprint"],
-                    "candidate_fingerprint",
-                    maximum=128,
-                )
-                if "candidate_fingerprint" in payload
-                else ""
+            profile_ref = _request_text(
+                payload["profile_ref"], "profile_ref", maximum=128
             )
-            current_revision = settings_revision()
-            if expected != current_revision:
-                return jsonify({"code": "stale_revision"}), 409
-            actor_id, actor_name = _management_actor()
-            prepared = prepare_settings(
-                settings_provider(), payload["settings"]
+            page_state = _request_text(
+                payload["page_state"], "page_state", maximum=40
+            ).casefold()
+            profile_id, profile_mask, settings = picker_profile(profile_ref)
+            actor_user_id, _actor_username = _actor_identity()
+            result = picker_service().start(
+                profile_id=profile_id,
+                profile_mask=profile_mask,
+                page_state=page_state,
+                actor_user_id=actor_user_id,
+                context={"settings": settings},
             )
-            candidate = _selector_settings_projection(
-                prepared, revision=expected
+        except Exception as error:
+            return picker_error(error)
+        return jsonify(result), 202
+
+    @blueprint.get("/api/selector-probe/picker/<session_id>")
+    @allow_roles("administrator")
+    def picker_status_route(session_id: str):
+        try:
+            selected_id = _request_text(
+                session_id, "session_id", maximum=64
             )
-            checks = run_preflight(prepared, candidate)
-            checked_at = utcnow_fn().astimezone(UTC).isoformat()
-            canonical_fingerprint = _settings_candidate_fingerprint(
-                candidate
+            actor_user_id, _actor_username = _actor_identity()
+            result = picker_service().get(
+                selected_id, actor_user_id=actor_user_id
             )
-            token_payload = {
-                "actor": actor_id,
-                "workspace": (
-                    f"{candidate['site']}:{candidate['environment']}"
+        except Exception as error:
+            return picker_error(error)
+        return jsonify(result)
+
+    @blueprint.post(
+        "/api/selector-probe/picker/<session_id>/confirm"
+    )
+    @allow_roles("administrator")
+    def picker_confirm_route(session_id: str):
+        try:
+            payload = _strict_object(
+                request.get_json(silent=True),
+                required={"expected_revision", "selections"},
+            )
+            expected_revision = _request_revision(
+                payload["expected_revision"]
+            )
+            selections = payload["selections"]
+            if (
+                not isinstance(selections, Sequence)
+                or isinstance(selections, (str, bytes, bytearray))
+            ):
+                raise ValueError("invalid_request")
+            normalized_selections = []
+            for selection in selections:
+                if (
+                    not isinstance(selection, Mapping)
+                    or set(selection) != {"selection_id", "display_name"}
+                ):
+                    raise ValueError("invalid_request")
+                normalized_selections.append(dict(selection))
+            actor_user_id, _actor_username = _actor_identity()
+            result = picker_service().confirm(
+                _request_text(session_id, "session_id", maximum=64),
+                actor_user_id=actor_user_id,
+                expected_revision=expected_revision,
+                selections=normalized_selections,
+            )
+        except Exception as error:
+            return picker_error(error)
+        return jsonify(result)
+
+    @blueprint.post(
+        "/api/selector-probe/picker/<session_id>/cancel"
+    )
+    @allow_roles("administrator")
+    def picker_cancel_route(session_id: str):
+        try:
+            payload = _strict_object(
+                request.get_json(silent=True),
+                required={"expected_revision"},
+            )
+            actor_user_id, _actor_username = _actor_identity()
+            result = picker_service().cancel(
+                _request_text(session_id, "session_id", maximum=64),
+                actor_user_id=actor_user_id,
+                expected_revision=_request_revision(
+                    payload["expected_revision"]
                 ),
-                "base_revision": expected,
-                "client_fingerprint": client_fingerprint,
-                "canonical_fingerprint": canonical_fingerprint,
-                "checked_at": checked_at,
-            }
-            token = URLSafeTimedSerializer(
-                _settings_secret(),
-                salt="selector-probe-settings-preflight",
-            ).dumps(token_payload)
-            status = (
-                "passed"
-                if all(value == "passed" for value in checks.values())
-                else "failed"
             )
-            with _open_store(store_factory) as store:
-                store.save_management_preflight_health(
-                    f"{candidate['site']}:{candidate['environment']}",
-                    {
-                        "checks": checks,
-                        "profiles": candidate.get("profiles", []),
-                        "base_revision": expected,
-                        "canonical_fingerprint": (
-                            canonical_fingerprint
-                        ),
-                    },
-                    checked_at=checked_at,
-                )
-            return jsonify(
-                {
-                    "status": status,
-                    "base_revision": expected,
-                    "candidate_fingerprint": client_fingerprint,
-                    "preflight_token": token,
-                    "checked_at": checked_at,
-                    "checks": checks,
-                    "settings": candidate,
-                    "profiles": candidate.get("profiles", []),
-                }
-            )
-        except ValueError:
-            return jsonify({"code": "invalid_settings_request"}), 400
-        except Exception:
-            return jsonify({"code": "preflight_unavailable"}), 503
+        except Exception as error:
+            return picker_error(error)
+        return jsonify(result)
 
     @blueprint.patch("/api/selector-probe/settings")
     @allow_roles("administrator")
@@ -3847,9 +3305,6 @@ def create_selector_probe_blueprint(
                     "settings",
                 },
                 optional={
-                    "preflight_token",
-                    "candidate_fingerprint",
-                    "preflight_checked_at",
                     "profile_changes",
                     "secrets",
                 },
@@ -3922,7 +3377,6 @@ def create_selector_probe_blueprint(
                             "rollout_mode",
                             "target_origin",
                             "profiles",
-                            "model",
                             "redis",
                         )
                         if before.get(name) != candidate.get(name)
@@ -3942,10 +3396,6 @@ def create_selector_probe_blueprint(
                             SELECT 1
                             FROM publication_outbox
                             WHERE status IN ('pending', 'processing')
-                            UNION ALL
-                            SELECT 1
-                            FROM element_request_outbox
-                            WHERE status = 'publishing'
                             LIMIT 1
                             """
                         ).fetchone()
@@ -3956,71 +3406,6 @@ def create_selector_probe_blueprint(
                         if registry_lease_active():
                             return settings_failure(
                                 "publication_lease_active", 409
-                            )
-                    if candidate["rollout_mode"] == "enforce":
-                        token = payload.get("preflight_token")
-                        client_fingerprint = payload.get(
-                            "candidate_fingerprint"
-                        )
-                        client_checked_at = payload.get(
-                            "preflight_checked_at"
-                        )
-                        if (
-                            not isinstance(token, str)
-                            or not token
-                            or not isinstance(client_fingerprint, str)
-                            or not client_fingerprint
-                            or not isinstance(client_checked_at, str)
-                            or not client_checked_at
-                        ):
-                            return settings_failure(
-                                "preflight_required", 409
-                            )
-                        try:
-                            token_data = URLSafeTimedSerializer(
-                                _settings_secret(),
-                                salt=(
-                                    "selector-probe-settings-preflight"
-                                ),
-                            ).loads(
-                                token,
-                                max_age=PREFLIGHT_TOKEN_MAX_AGE_SECONDS,
-                            )
-                        except (BadSignature, SignatureExpired):
-                            return settings_failure(
-                                "invalid_preflight_token", 409
-                            )
-                        canonical_fingerprint = _settings_candidate_fingerprint(
-                            candidate
-                        )
-                        expected_token = {
-                            "actor": actor_id,
-                            "workspace": (
-                                f"{candidate['site']}:"
-                                f"{candidate['environment']}"
-                            ),
-                            "base_revision": expected,
-                            "client_fingerprint": client_fingerprint,
-                            "canonical_fingerprint": (
-                                canonical_fingerprint
-                            ),
-                            "checked_at": client_checked_at,
-                        }
-                        if not isinstance(token_data, Mapping) or any(
-                            token_data.get(name) != value
-                            for name, value in expected_token.items()
-                        ):
-                            return settings_failure(
-                                "invalid_preflight_token", 409
-                            )
-                        if not all(
-                            value == "passed"
-                            for value in run_preflight(
-                                prepared, candidate
-                            ).values()
-                        ):
-                            return settings_failure(
-                                "preflight_failed", 409
                             )
                     staged_candidate = _selector_settings_projection(
                         prepared, revision=expected + 1
@@ -4151,7 +3536,6 @@ def create_selector_probe_blueprint(
         key = ""
         digest = ""
         paths = {
-            "model_api_key": "model",
             "redis_password": "redis",
             "webhook_signing_secret": "webhook",
         }
@@ -4217,17 +3601,7 @@ def create_selector_probe_blueprint(
 
                     def clear_secret(current):
                         probe = current.setdefault("selector_probe", {})
-                        if secret_name == "model_api_key":
-                            model_id = str(probe.get("model_id") or "")
-                            for item in current.get("models", {}).get(
-                                "items", []
-                            ):
-                                if (
-                                    isinstance(item, dict)
-                                    and item.get("id") == model_id
-                                ):
-                                    item["api_key"] = ""
-                        elif secret_name == "redis_password":
+                        if secret_name == "redis_password":
                             probe.setdefault("redis", {})["password"] = ""
                         else:
                             probe.setdefault("webhook", {})[
@@ -4366,8 +3740,10 @@ def create_selector_probe_blueprint(
                 "idempotency_key",
                 maximum=128,
             )
+            with _open_store(store_factory) as revision_store:
+                settings_revision = revision_store.current_revision("settings")
             projected = _selector_settings_projection(
-                settings_provider(), revision=settings_revision()
+                settings_provider(), revision=settings_revision
             )
             expected_payload = {
                 "event": "selector_probe.webhook_test",
@@ -4708,7 +4084,6 @@ __all__ = [
     "RedisRunDispatcher",
     "check_strategy_gate",
     "create_selector_probe_blueprint",
-    "default_element_request_dispatcher",
     "default_gate_service_factory",
     "default_run_dispatcher",
     "default_registry_factory",

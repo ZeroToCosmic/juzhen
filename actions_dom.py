@@ -22,11 +22,16 @@ async def _run_before_side_effect(before_side_effect) -> None:
 
 
 async def get_viewport(page) -> tuple[float, float]:
-    viewport = getattr(page, "viewport_size", None)
-    if not viewport and hasattr(page, "evaluate"):
-        viewport = await page.evaluate(
-            "({width: window.innerWidth, height: window.innerHeight})"
-        )
+    viewport = None
+    if hasattr(page, "evaluate"):
+        try:
+            viewport = await page.evaluate(
+                "({width: window.innerWidth, height: window.innerHeight})"
+            )
+        except Exception:
+            viewport = None
+    if not viewport:
+        viewport = getattr(page, "viewport_size", None)
     viewport = viewport or {"width": 1280, "height": 720}
     return max(float(viewport["width"]), 1), max(float(viewport["height"]), 1)
 

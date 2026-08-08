@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import time
 import re
@@ -20,30 +21,60 @@ class WebhookConfig:
 @dataclass(frozen=True)
 class ProbeConfig:
     enabled: bool
-    site: str
-    environment: str
+    rollout_mode: str
     timezone: str
-    daily_time: time
-    target_url: str
+    schedule_time: time
     target_origin: str
     test_profile_ids: tuple[str, ...]
-    model_id: str
-    observe_only: bool
+    dedicated_test_profile_ids: tuple[str, ...]
+    page_timeout_seconds: int
+    redis: dict[str, object]
     webhook: WebhookConfig
+
+    @property
+    def site(self) -> str:
+        """Compatibility identity until store callers use the fixed namespace."""
+
+        return "tiktok"
+
+    @property
+    def environment(self) -> str:
+        """Compatibility identity until store callers use the fixed namespace."""
+
+        return "production"
+
+    @property
+    def daily_time(self) -> time:
+        return self.schedule_time
+
+    @property
+    def target_url(self) -> str:
+        return self.target_origin
+
+    @property
+    def observe_only(self) -> bool:
+        return self.rollout_mode == "observe"
 
     def public_dict(self) -> dict:
         return {
             "enabled": self.enabled,
-            "site": self.site,
-            "environment": self.environment,
+            "rollout_mode": self.rollout_mode,
             "timezone": self.timezone,
-            "daily_time": self.daily_time.strftime("%H:%M"),
-            "target_url": self.target_url,
+            "schedule_time": self.schedule_time.strftime("%H:%M"),
+            "target_origin": self.target_origin,
             "test_profile_ids": [
                 mask_profile_id(item) for item in self.test_profile_ids
             ],
-            "model_id": self.model_id,
-            "observe_only": self.observe_only,
+            "dedicated_test_profile_ids": [
+                mask_profile_id(item)
+                for item in self.dedicated_test_profile_ids
+            ],
+            "page_timeout_seconds": self.page_timeout_seconds,
+            "redis": {
+                "namespace": str(self.redis.get("namespace") or ""),
+                "url_configured": bool(self.redis.get("url")),
+                "password_configured": bool(self.redis.get("password")),
+            },
             "webhook": {
                 "enabled": self.webhook.enabled,
                 "type": self.webhook.type,
@@ -60,6 +91,24 @@ def _required_text(value: object, name: str) -> str:
     return result
 
 
+def _profile_ids(value: object, name: str) -> tuple[str, ...]:
+    if not isinstance(value, (list, tuple)):
+        raise ValueError(f"{name} must be an array")
+    if any(not isinstance(item, str) or not item.strip() for item in value):
+        raise ValueError(f"{name} must contain non-empty strings")
+    return tuple(dict.fromkeys(item.strip() for item in value))
+
+
+def _page_timeout(value: object) -> int:
+    if isinstance(value, bool):
+        return 90
+    try:
+        result = int(value)
+    except (TypeError, ValueError):
+        return 90
+    return result if 10 <= result <= 300 else 90
+
+
 def normalize_probe_config(value: object) -> ProbeConfig:
     if not isinstance(value, dict):
         raise ValueError("selector_probe must be a JSON object")
@@ -70,17 +119,26 @@ def normalize_probe_config(value: object) -> ProbeConfig:
     except ZoneInfoNotFoundError as error:
         raise ValueError("selector_probe.timezone must be a valid timezone") from error
 
-    raw_time = _required_text(value.get("daily_time"), "selector_probe.daily_time")
+    raw_time = _required_text(
+        value.get("schedule_time", value.get("daily_time", "03:00")),
+        "selector_probe.schedule_time",
+    )
     if re.fullmatch(r"\d{2}:\d{2}", raw_time) is None:
-        raise ValueError("selector_probe.daily_time must use HH:MM")
+        raise ValueError("selector_probe.schedule_time must use HH:MM")
     try:
         hour_text, minute_text = raw_time.split(":", 1)
-        daily_time = time(int(hour_text), int(minute_text))
+        schedule_time = time(int(hour_text), int(minute_text))
     except (TypeError, ValueError) as error:
-        raise ValueError("selector_probe.daily_time must use HH:MM") from error
+        raise ValueError("selector_probe.schedule_time must use HH:MM") from error
 
-    target_url = _required_text(value.get("target_url"), "selector_probe.target_url")
-    parsed = urlsplit(target_url)
+    target_origin = _required_text(
+        value.get(
+            "target_origin",
+            value.get("target_url", "https://www.tiktok.com"),
+        ),
+        "selector_probe.target_origin",
+    )
+    parsed = urlsplit(target_origin)
     hostname = (parsed.hostname or "").lower().rstrip(".")
     is_tiktok_host = hostname == "tiktok.com" or hostname.endswith(".tiktok.com")
     if (
@@ -91,22 +149,41 @@ def normalize_probe_config(value: object) -> ProbeConfig:
         or not is_tiktok_host
     ):
         raise ValueError(
-            "selector_probe.target_url must be an HTTPS TikTok URL without credentials"
+            "selector_probe.target_origin must be HTTPS TikTok without credentials"
         )
 
-    raw_profiles = value.get("test_profile_ids", [])
-    if not isinstance(raw_profiles, (list, tuple)):
-        raise ValueError("selector_probe.test_profile_ids must be an array")
-    if any(
-        not isinstance(item, str) or not item.strip() for item in raw_profiles
-    ):
-        raise ValueError(
-            "selector_probe.test_profile_ids must contain non-empty strings"
-        )
-    profiles = tuple(dict.fromkeys(item.strip() for item in raw_profiles))
+    profiles = _profile_ids(
+        value.get("test_profile_ids", []),
+        "selector_probe.test_profile_ids",
+    )
+    dedicated_profiles = _profile_ids(
+        value.get("dedicated_test_profile_ids", list(profiles)),
+        "selector_probe.dedicated_test_profile_ids",
+    )
     enabled = value.get("enabled") is True
     if enabled and len(profiles) < 2:
         raise ValueError("selector_probe requires at least two unique test profiles")
+    if enabled and len(dedicated_profiles) < 2:
+        raise ValueError(
+            "selector_probe requires at least two dedicated test profiles"
+        )
+    if not set(dedicated_profiles).issubset(profiles):
+        raise ValueError(
+            "selector_probe dedicated profiles must be selected test profiles"
+        )
+
+    rollout_mode = str(value.get("rollout_mode") or "").strip()
+    if not rollout_mode:
+        rollout_mode = "observe" if value.get("observe_only") is not False else "publish"
+    if rollout_mode not in {"observe", "publish", "enforce"}:
+        raise ValueError("selector_probe.rollout_mode is unsupported")
+
+    redis_value = value.get("redis")
+    if redis_value is None:
+        redis_value = {}
+    if not isinstance(redis_value, Mapping):
+        raise ValueError("selector_probe.redis must be a JSON object")
+    redis_config = dict(redis_value)
 
     webhook_value = value.get("webhook")
     if webhook_value is None:
@@ -150,17 +227,13 @@ def normalize_probe_config(value: object) -> ProbeConfig:
 
     return ProbeConfig(
         enabled=enabled,
-        site=_required_text(value.get("site") or "tiktok", "selector_probe.site"),
-        environment=_required_text(
-            value.get("environment") or "production",
-            "selector_probe.environment",
-        ),
+        rollout_mode=rollout_mode,
         timezone=timezone,
-        daily_time=daily_time,
-        target_url=target_url,
+        schedule_time=schedule_time,
         target_origin=f"{parsed.scheme}://{parsed.netloc}",
         test_profile_ids=profiles,
-        model_id=str(value.get("model_id") or "").strip(),
-        observe_only=value.get("observe_only") is not False,
+        dedicated_test_profile_ids=dedicated_profiles,
+        page_timeout_seconds=_page_timeout(value.get("page_timeout_seconds", 90)),
+        redis=redis_config,
         webhook=webhook,
     )

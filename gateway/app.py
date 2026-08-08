@@ -7,6 +7,7 @@ import logging
 import os
 import re
 import random
+import secrets
 import subprocess
 import threading
 import time
@@ -18,7 +19,7 @@ from urllib.parse import parse_qsl, unquote, urlencode, urlsplit, urlunsplit
 
 import requests
 from pathlib import Path
-from flask import Flask, g, jsonify, render_template_string, request, session
+from flask import Flask, abort, g, jsonify, render_template, render_template_string, request, send_from_directory, session
 from werkzeug.exceptions import RequestEntityTooLarge
 
 from adspower import AdsPowerController, AdsPowerError
@@ -90,6 +91,7 @@ from gateway.content_store import (
 from gateway.ip_checker import fetch_ip_info
 from gateway.model_presets import public_model_presets
 from gateway.management_db import open_management_db
+from gateway.local_only import install_local_only_guard
 from gateway.proxy import build_static_proxy_url, generate_proxy_url
 from gateway.proxy_pool import parse_proxy_pool, proxy_pool_key, select_proxy_from_pool, summarize_proxy_pool
 from gateway.r2_client import list_r2_video_objects
@@ -102,6 +104,8 @@ from gateway.settings_store import (
     update_settings as merge_saved_settings,
 )
 from gateway.session_key import load_or_create_session_key
+from execution_v2.blueprint import create_browser_v2_blueprint
+from comment_campaign.blueprint import create_comment_campaign_blueprint
 from browser_strategy_config import (
     ACTION_CATALOG,
     DEFAULT_ACTION_PARAMS,
@@ -128,7 +132,6 @@ from selector_probe.blueprint import (
     check_strategy_gate,
     create_selector_probe_blueprint,
     default_gate_service_factory as default_selector_probe_gate_service_factory,
-    default_legacy_elements_provider as default_selector_probe_legacy_elements_provider,
     default_registry_factory as default_selector_probe_registry_factory,
     default_run_dispatcher as default_selector_probe_dispatcher,
     default_store_factory as default_selector_probe_store_factory,
@@ -1922,590 +1925,11 @@ CONTROL_PAGE_HTML = r"""
         </div>
       </section>
 
-      <section class="panel" id="panel-strategies">
-        <section class="settings-group" data-settings-group="browser-actions">
-          <div class="selector-probe-console">
-            <header class="selector-probe-header">
-              <div>
-                <h3 class="selector-probe-title">网页元素与执行策略</h3>
-                <p class="muted selector-probe-description">管理关键元素健康、策略闸门、探针运行与选择器版本。</p>
-              </div>
-              <div class="selector-probe-actions" aria-label="探针快捷操作">
-                <span id="selector-probe-health" class="selector-probe-health" data-health="unknown" role="status" aria-live="polite">○ 状态未知</span>
-                <button id="selector-probe-refresh" class="secondary" type="button">刷新</button>
-                <button id="selector-probe-run-now" class="primary" type="button">立即运行探针</button>
-                <span class="selector-probe-alert-count">未读告警 <strong id="selector-probe-unread-alerts" role="status" aria-live="polite">0</strong></span>
-              </div>
-            </header>
-
-            <nav class="selector-probe-tabs" role="tablist" aria-label="网页元素与执行策略管理">
-              <button class="selector-probe-tab" id="selector-probe-tab-overview" type="button" role="tab" aria-selected="true" aria-controls="selector-probe-panel-overview" data-selector-probe-tab="overview">总览</button>
-              <button class="selector-probe-tab" id="selector-probe-tab-elements" type="button" role="tab" aria-selected="false" aria-controls="selector-probe-panel-elements" data-selector-probe-tab="elements" tabindex="-1">元素</button>
-              <button class="selector-probe-tab" id="selector-probe-tab-gates" type="button" role="tab" aria-selected="false" aria-controls="selector-probe-panel-gates" data-selector-probe-tab="gates" tabindex="-1">策略闸门</button>
-              <button class="selector-probe-tab" id="selector-probe-tab-runs" type="button" role="tab" aria-selected="false" aria-controls="selector-probe-panel-runs" data-selector-probe-tab="runs" tabindex="-1">探针运行</button>
-              <button class="selector-probe-tab" id="selector-probe-tab-versions" type="button" role="tab" aria-selected="false" aria-controls="selector-probe-panel-versions" data-selector-probe-tab="versions" tabindex="-1">版本</button>
-              <button class="selector-probe-tab" id="selector-probe-tab-alerts" type="button" role="tab" aria-selected="false" aria-controls="selector-probe-panel-alerts" data-selector-probe-tab="alerts" tabindex="-1">告警</button>
-              <button class="selector-probe-tab" id="selector-probe-tab-settings" type="button" role="tab" aria-selected="false" aria-controls="selector-probe-panel-settings" data-selector-probe-tab="settings" tabindex="-1">设置</button>
-            </nav>
-
-            <p id="selector-probe-page-status" class="selector-probe-page-status" role="status" aria-live="polite"></p>
-
-            <section class="selector-probe-panel is-active" id="selector-probe-panel-overview" role="tabpanel" aria-labelledby="selector-probe-tab-overview" data-selector-probe-panel="overview">
-              <div id="selector-probe-overview-health" class="selector-overview-health" data-health="unknown" role="status" aria-live="polite">○ 状态未知 · 当前发布状态</div>
-              <div id="selector-overview-summaries" class="selector-summary-grid" aria-label="探针摘要"></div>
-              <div class="selector-overview-facts">
-                <article><span class="muted">当前版本</span><strong id="selector-overview-version">尚无版本</strong></article>
-                <article><span class="muted">最近成功验证</span><strong id="selector-overview-last-validation">尚无成功验证</strong></article>
-                <article><span class="muted">下次运行</span><strong id="selector-overview-next-run">每日 03:00 Asia/Shanghai</strong></article>
-                <article><span class="muted">动态元素</span><strong id="selector-overview-element-counts">全部 0</strong></article>
-                <article><span class="muted">策略闸门</span><strong id="selector-overview-gates">自动暂停 0 · 人工暂停 0</strong></article>
-                <article><span class="muted">告警与 Webhook</span><strong id="selector-overview-alerts">未关闭告警 0 · Webhook 未知</strong></article>
-              </div>
-              <div class="selector-overview-columns">
-                <section>
-                  <div class="content-toolbar">
-                    <h4>关键元素健康</h4>
-                    <button class="secondary" type="button" data-selector-summary-tab="elements">查看全部元素</button>
-                  </div>
-                  <div id="selector-overview-priority" class="selector-overview-list"></div>
-                </section>
-                <section>
-                  <h4>最近事件</h4>
-                  <div id="selector-overview-events" class="selector-overview-list"></div>
-                </section>
-              </div>
-            </section>
-
-            <section class="selector-probe-panel" id="selector-probe-panel-elements" role="tabpanel" aria-labelledby="selector-probe-tab-elements" data-selector-probe-panel="elements" hidden>
-              <div id="selector-element-directory">
-              <div class="content-toolbar">
-                <div>
-                  <h4>动态元素目录</h4>
-                  <span class="muted">列表由服务端分页与排序，可随时增加元素，不限制为固定数量。</span>
-                </div>
-                <button id="selector-element-add" class="primary" type="button" hidden>新增元素</button>
-              </div>
-              <div id="selector-element-counts" class="selector-summary-grid" aria-label="元素状态统计"></div>
-              <form id="selector-element-filters" class="selector-element-filters" role="search">
-                <label class="wide">搜索
-                  <input name="search" type="search" autocomplete="off" placeholder="名称、ID 或策略">
-                </label>
-                <label>健康状态
-                  <select name="status">
-                    <option value="all">全部</option>
-                    <option value="healthy">正常</option>
-                    <option value="using_lkg">使用 LKG</option>
-                    <option value="draft">草稿待验证</option>
-                    <option value="failed">失败</option>
-                    <option value="probe_unavailable">探针不可用</option>
-                    <option value="disabled">已停用</option>
-                  </select>
-                </label>
-                <label>管理来源
-                  <select name="source">
-                    <option value="all">全部</option>
-                    <option value="automatic">自动管理</option>
-                    <option value="legacy_manual">历史人工</option>
-                    <option value="disabled">已停用</option>
-                  </select>
-                </label>
-                <label>作用域
-                  <select name="scope">
-                    <option value="all">全部</option>
-                    <option value="page">页面</option>
-                    <option value="active_video">当前视频</option>
-                    <option value="visible_comment_panel">可见评论面板</option>
-                  </select>
-                </label>
-                <label>策略依赖
-                  <select name="dependency">
-                    <option value="all">全部</option>
-                    <option value="yes">已引用</option>
-                    <option value="no">未引用</option>
-                  </select>
-                </label>
-              </form>
-              <div class="table-wrap selector-element-table">
-                <table>
-                  <thead>
-                    <tr><th>名称与作用域</th><th>健康状态</th><th>主定位器类型</th><th>策略依赖</th><th>最近验证</th><th>操作</th></tr>
-                  </thead>
-                  <tbody id="selector-element-rows"></tbody>
-                </table>
-              </div>
-              <div class="selector-pagination">
-                <label>每页
-                  <select id="selector-element-page-size">
-                    <option value="20">20</option>
-                    <option value="50">50</option>
-                    <option value="100">100</option>
-                  </select>
-                </label>
-                <span id="selector-element-page-meta" class="muted">第 1 / 1 页，共 0 项</span>
-                <button id="selector-element-prev" class="secondary" type="button" disabled>上一页</button>
-                <button id="selector-element-next" class="secondary" type="button" disabled>下一页</button>
-              </div>
-
-              <section class="selector-legacy-editor">
-                <div class="content-toolbar">
-                  <div>
-                    <h4>传统浏览器元素与策略编辑器</h4>
-                    <span class="muted">现有草稿独立维护，不会被探针刷新覆盖。</span>
-                  </div>
-                </div>
-
-          <section class="browser-strategy-section" id="browser-elements-manager">
-            <div class="content-toolbar">
-              <div>
-                <h4>元素管理</h4>
-                <span class="muted">元素列表默认只显示自定义名称；XPath 仅在新增或编辑时展示。</span>
-              </div>
-              <button class="secondary" id="browser-element-add" type="button">新增元素</button>
-            </div>
-            <div id="browser-action-elements-list"></div>
-            <span id="browser-element-status" class="muted" role="status"></span>
-          </section>
-
-          <section class="settings-group browser-strategy-section" id="browser-pattern-library">
-            <div class="content-toolbar">
-              <div>
-                <h4>行为模式库</h4>
-                <span class="muted">只录制鼠标轨迹或键盘节奏，不保存输入内容和绝对屏幕坐标。</span>
-              </div>
-              <div class="compact-actions">
-                <button class="secondary" id="browser-pattern-record-mouse" type="button">录制鼠标轨迹</button>
-                <button class="secondary" id="browser-pattern-record-keyboard" type="button">录制键盘节奏</button>
-              </div>
-            </div>
-            <div class="browser-pattern-list" id="browser-pattern-list">
-              <div class="browser-library-empty muted">暂无行为模式。</div>
-            </div>
-            <span id="browser-pattern-status" class="muted" role="status"></span>
-          </section>
-
-          <section class="settings-group browser-strategy-section" id="browser-strategy-list-view">
-            <div class="content-toolbar">
-              <div>
-                <h4>执行策略</h4>
-                <span class="muted">每个策略展示运行模式、动作数量、修复状态和保存状态。</span>
-              </div>
-              <button class="primary" id="browser-strategy-create" type="button">新建策略</button>
-            </div>
-            <div class="browser-strategy-list" id="browser-strategy-list">
-              <div class="browser-library-empty muted">暂无执行策略。</div>
-            </div>
-            <template id="browser-strategy-card-template">
-              <article class="browser-strategy-card">
-                <div>
-                  <strong data-strategy-name></strong>
-                  <span class="muted">
-                    <span data-strategy-mode></span> ·
-                    <span data-strategy-action-count></span> ·
-                    <span data-strategy-repair-state></span> ·
-                    <span data-strategy-save-state></span>
-                  </span>
-                </div>
-                <button class="secondary" data-strategy-open type="button">打开配置</button>
-              </article>
-            </template>
-            <span id="browser-strategy-list-status" class="muted" role="status"></span>
-          </section>
-
-          <section id="browser-strategy-editor-view" class="is-hidden" aria-hidden="true">
-            <div class="browser-strategy-editor">
-              <div class="content-toolbar">
-                <div class="compact-actions">
-                  <button class="secondary" id="browser-strategy-back" type="button">返回策略列表</button>
-                  <input id="browser-strategy-name" autocomplete="off" aria-label="策略名称" placeholder="策略名称">
-                  <button class="secondary" id="browser-strategy-rename" type="button">重命名</button>
-                </div>
-                <div class="compact-actions">
-                  <span id="browser-strategy-save-state" class="muted" role="status">未保存</span>
-                  <button class="secondary" id="browser-strategy-delete" type="button">删除</button>
-                  <button class="primary" id="browser-strategy-save" type="button">保存策略</button>
-                </div>
-              </div>
-              <div class="grid">
-                <label>执行模式
-                  <select id="browser-strategy-run-mode"><option value="once">一次</option><option value="loop">循环</option></select>
-                </label>
-                <label>循环最短时长（分钟）<input id="browser-strategy-loop-minutes-min" type="number" min="0.01" step="0.01"></label>
-                <label>循环最长时长（分钟）<input id="browser-strategy-loop-minutes-max" type="number" min="0.01" step="0.01"></label>
-                <label>每批窗口数<input id="browser-strategy-batch-size" type="number" min="1" max="8" step="1" value="4"></label>
-              </div>
-              <div>
-                <h4>添加动作积木</h4>
-                <div class="browser-block-palette" id="browser-block-palette">
-                  <button class="secondary" data-block-type="move" type="button">移动</button>
-                  <button class="secondary" data-block-type="click" type="button">点击</button>
-                  <button class="secondary" data-block-type="scroll_up" type="button">向上滚动</button>
-                  <button class="secondary" data-block-type="scroll_down" type="button">向下滚动</button>
-                  <button class="secondary" data-block-type="keyboard_input" type="button">键盘输入</button>
-                  <button class="secondary" data-block-type="pause" type="button">停止（等待）</button>
-                </div>
-              </div>
-              <div>
-                <h4>动作顺序</h4>
-                <div class="browser-strategy-actions" id="browser-strategy-actions">
-                  <div class="browser-library-empty muted">选择上方积木后，动作才会出现在这里。</div>
-                </div>
-                <template id="browser-block-card-template">
-                  <article class="browser-block-card">
-                    <div>
-                      <strong data-action-type></strong>
-                      <span class="muted" data-action-summary></span>
-                    </div>
-                    <div class="compact-actions">
-                      <button class="secondary" data-block-edit type="button">编辑</button>
-                      <button class="secondary" data-block-up type="button">上移</button>
-                      <button class="secondary" data-block-down type="button">下移</button>
-                      <button class="secondary" data-block-delete type="button">删除</button>
-                    </div>
-                  </article>
-                </template>
-              </div>
-            </div>
-          </section>
-
-          <dialog id="browser-element-dialog">
-            <form id="browser-element-form" method="dialog">
-              <div class="dialog-header">
-                <h3 id="browser-element-dialog-title">编辑网页元素</h3>
-                <button class="icon-button" id="browser-element-dialog-close" type="button" aria-label="关闭">×</button>
-              </div>
-              <label>元素名称<input id="browser-element-alias" required autocomplete="off"></label>
-              <label>元素作用域
-                <select id="browser-element-scope">
-                  <option value="page">页面</option>
-                  <option value="active_video">当前视频</option>
-                  <option value="visible_comment_panel">可见评论面板</option>
-                </select>
-              </label>
-              <div class="content-toolbar">
-                <strong>有序定位候选</strong>
-                <button class="secondary" id="browser-element-add-locator" type="button">添加候选</button>
-              </div>
-              <div id="browser-element-locators"></div>
-              <span class="muted">{{ '\u9ad8\u7ea7' }} XPath</span>
-              <div class="compact-actions">
-                <button class="secondary" id="browser-element-template" type="button">应用 TikTok 评论模板</button>
-                <button class="secondary" id="browser-element-test" type="button">测试当前草稿</button>
-              </div>
-              <div class="table-wrap">
-                <table aria-label="元素测试结果">
-                  <thead><tr><th>窗口</th><th>元素</th><th>状态</th><th>代码</th><th>诊断</th></tr></thead>
-                  <tbody id="browser-element-test-results"></tbody>
-                </table>
-              </div>
-              <span class="bad" id="browser-element-dialog-status"></span>
-              <div class="dialog-actions">
-                <button id="browser-element-dialog-cancel" type="button">取消</button>
-                <button class="primary" type="submit">保存元素</button>
-              </div>
-            </form>
-          </dialog>
-          <dialog id="browser-block-parameter-dialog">
-            <form id="browser-block-parameter-form" method="dialog">
-              <div class="dialog-header">
-                <h3 id="browser-block-parameter-title">配置动作积木</h3>
-                <button class="icon-button" id="browser-block-parameter-close" type="button" aria-label="关闭">×</button>
-              </div>
-              <div class="grid" id="browser-block-parameter-fields"></div>
-              <span class="bad" id="browser-block-parameter-status" role="status"></span>
-              <div class="dialog-actions">
-                <button id="browser-block-parameter-cancel" type="button">取消</button>
-                <button class="primary" type="submit">应用参数</button>
-              </div>
-            </form>
-          </dialog>
-              </section>
-              </div>
-
-              <section id="selector-element-detail" class="selector-element-workspace" hidden>
-                <div class="content-toolbar">
-                  <div>
-                    <button id="selector-element-detail-back" class="secondary" type="button">返回元素目录</button>
-                    <h4 id="selector-element-detail-title">元素详情</h4>
-                    <span id="selector-element-detail-alias" class="muted"></span>
-                  </div>
-                  <div class="compact-actions">
-                    <span id="selector-element-detail-status" class="selector-probe-health">○ 未知</span>
-                    <button id="selector-element-detail-probe" class="secondary" type="button">只读探测</button>
-                    <button id="selector-element-detail-validate" class="primary" type="button" hidden>验证发布</button>
-                  </div>
-                </div>
-                <div class="selector-overview-facts">
-                  <article><span class="muted">当前版本</span><strong id="selector-element-detail-version">尚无版本</strong></article>
-                  <article><span class="muted">策略依赖</span><strong id="selector-element-detail-dependencies">0</strong></article>
-                  <article><span class="muted">最近验证</span><strong id="selector-element-detail-last-validation">尚未验证</strong></article>
-                </div>
-                <div class="selector-detail-tabs" aria-label="元素详情分区">
-                  <button class="selector-detail-tab active" type="button" data-selector-detail-tab="evidence" aria-pressed="true">概览与证据</button>
-                  <button class="selector-detail-tab" type="button" data-selector-detail-tab="candidates" aria-pressed="false">候选对比</button>
-                  <button class="selector-detail-tab" type="button" data-selector-detail-tab="repairs" aria-pressed="false">修正记录</button>
-                  <button class="selector-detail-tab" type="button" data-selector-detail-tab="history" aria-pressed="false">版本历史</button>
-                </div>
-                <section data-selector-detail-panel="evidence">
-                  <h5>有序结构化 Locator</h5>
-                  <div id="selector-element-detail-evidence" class="selector-detail-list"></div>
-                  <h5>双 Profile × 双轮验证</h5>
-                  <div id="selector-element-validation-matrix" class="selector-validation-matrix"></div>
-                </section>
-                <section data-selector-detail-panel="candidates" hidden>
-                  <div id="selector-element-detail-candidates" class="selector-detail-list"></div>
-                </section>
-                <section data-selector-detail-panel="repairs" hidden>
-                  <p class="muted">最多显示三次修正，仅展示安全失败代码，不展示 Prompt 或模型原始输出。</p>
-                  <div id="selector-element-detail-repairs" class="selector-detail-list"></div>
-                </section>
-                <section data-selector-detail-panel="history" hidden>
-                  <div id="selector-element-detail-history" class="selector-detail-list"></div>
-                </section>
-                <p id="selector-element-detail-error" class="bad" role="status"></p>
-              </section>
-
-              <dialog id="selector-element-wizard" class="selector-element-dialog">
-                <form id="selector-element-wizard-form" method="dialog">
-                  <div class="dialog-header">
-                    <div>
-                      <span id="selector-element-wizard-progress" class="muted">第 1 / 3 步</span>
-                      <h3>新增动态元素</h3>
-                    </div>
-                    <button id="selector-element-wizard-close" class="icon-button" type="button" aria-label="关闭">×</button>
-                  </div>
-                  <section data-selector-wizard-step="1">
-                    <h4>描述目标</h4>
-                    <label>显示名称<input name="displayName" required autocomplete="off"></label>
-                    <label>语义意图<textarea name="intent" required></textarea></label>
-                    <div class="grid">
-                      <label>所需页面状态
-                        <select name="requiredState"><option value="feed_ready">信息流就绪</option><option value="comment_panel_open">评论面板已打开</option><option value="comment_panel_closed">评论面板已关闭</option></select>
-                      </label>
-                      <label>作用域
-                        <select name="scope"><option value="page">页面</option><option value="active_video">当前视频</option><option value="visible_comment_panel">可见评论面板</option></select>
-                      </label>
-                      <label>只读探针动作
-                        <select name="probeAction"><option value="inspect_only">仅检查</option><option value="open_read_only">只读打开</option><option value="close_read_only">只读关闭</option></select>
-                      </label>
-                    </div>
-                    <details>
-                      <summary>高级语义约束</summary>
-                      <div class="grid">
-                        <label>接受的 Roles<input name="acceptedRoles" placeholder="button, dialog"></label>
-                        <label>Name 匹配<select name="nameMode"><option value="exact">精确</option><option value="contains">包含</option><option value="locale_map">多语言映射</option></select></label>
-                        <label>接受的 Names<input name="acceptedNames" placeholder="Share, 分享"></label>
-                        <label>首选稳定属性<input name="preferredAttributes" placeholder="data-e2e, aria-label"></label>
-                        <label class="wide">后置条件<input name="postcondition"></label>
-                      </div>
-                      <p class="muted">这里只补充语义约束；Locator 候选由探针生成并以只读方式展示。</p>
-                    </details>
-                  </section>
-                  <section data-selector-wizard-step="2" hidden>
-                    <h4>探针建议</h4>
-                    <div class="selector-overview-facts">
-                      <article><span class="muted">Role</span><strong id="selector-wizard-role">等待探测</strong></article>
-                      <article><span class="muted">Name</span><strong id="selector-wizard-name">等待探测</strong></article>
-                      <article><span class="muted">LLM 修复</span><strong id="selector-wizard-llm-used">未使用</strong></article>
-                    </div>
-                    <h5>稳定属性</h5><div id="selector-wizard-attributes" class="selector-detail-list"></div>
-                    <h5>结构化候选</h5><div id="selector-wizard-candidates" class="selector-detail-list"></div>
-                    <h5>拒绝的方法</h5><div id="selector-wizard-rejected" class="selector-detail-list"></div>
-                  </section>
-                  <section data-selector-wizard-step="3" hidden>
-                    <h4>验证发布</h4>
-                    <p class="muted">仅管理员可启动。必须由两个独立测试 Profile 连续两轮全部通过，才允许原子发布。</p>
-                    <div id="selector-element-wizard-validation-matrix" class="selector-validation-matrix"></div>
-                  </section>
-                  <p id="selector-element-wizard-status" class="selector-probe-page-status" role="status" aria-live="polite"></p>
-                  <div class="dialog-actions">
-                    <button id="selector-element-wizard-back" type="button">上一步</button>
-                    <button id="selector-element-wizard-next" class="primary" type="button">保存草稿并继续</button>
-                    <button id="selector-element-wizard-probe" class="secondary" type="button" hidden>启动只读探测</button>
-                    <button id="selector-element-wizard-validate" class="primary" type="button" hidden>启动验证</button>
-                  </div>
-                </form>
-              </dialog>
-
-              <dialog id="selector-element-migration-dialog" class="selector-element-dialog">
-                <form method="dialog">
-                  <div class="dialog-header">
-                    <h3>加入自动管理</h3>
-                    <button id="selector-element-migration-close" class="icon-button" type="button" aria-label="关闭">×</button>
-                  </div>
-                  <p id="selector-element-migration-copy">保留当前 Locator；先进行仅观察运行；管理员确认语义契约；策略依赖保持不变；不会自动开启强制执行。</p>
-                  <p id="selector-element-migration-error" class="bad" role="status"></p>
-                  <div class="dialog-actions">
-                    <button id="selector-element-migration-cancel" type="button">取消</button>
-                    <button id="selector-element-migration-confirm" class="primary" type="button">确认加入</button>
-                  </div>
-                </form>
-              </dialog>
-            </section>
-
-            <section class="selector-probe-panel" id="selector-probe-panel-gates" role="tabpanel" aria-labelledby="selector-probe-tab-gates" data-selector-probe-panel="gates" hidden>
-              <div class="selector-operation-header">
-                <div><h3>策略闸门</h3><p class="muted">自动原因只能由成功发布后的恢复链路清除；人工原因由管理员独立维护。</p></div>
-                <span id="selector-gate-status" class="muted" role="status" aria-live="polite"></span>
-              </div>
-              <div id="selector-gate-counts" class="selector-summary-grid selector-operation-summary"></div>
-              <div id="selector-gate-rows" class="selector-operation-list"></div>
-            </section>
-            <section class="selector-probe-panel" id="selector-probe-panel-runs" role="tabpanel" aria-labelledby="selector-probe-tab-runs" data-selector-probe-panel="runs" hidden>
-              <div class="selector-operation-header">
-                <div><h3>探针运行</h3><p class="muted">展示两个脱敏测试 Profile、两轮验证、修正、发布、协调、清理与租约结果。</p></div>
-                <button id="selector-run-now" class="primary" type="button">立即探测</button>
-              </div>
-              <p id="selector-run-status" class="selector-probe-page-status" role="status" aria-live="polite"></p>
-              <div id="selector-run-rows" class="selector-operation-list"></div>
-            </section>
-            <section class="selector-probe-panel" id="selector-probe-panel-versions" role="tabpanel" aria-labelledby="selector-probe-tab-versions" data-selector-probe-panel="versions" hidden>
-              <div class="selector-operation-header">
-                <div><h3>选择器版本</h3><p class="muted">历史版本只能创建新的回滚验证草稿，不提供直接激活动作。</p></div>
-                <span id="selector-version-status" class="muted" role="status" aria-live="polite"></span>
-              </div>
-              <div id="selector-version-rows" class="selector-operation-list"></div>
-            </section>
-            <section class="selector-probe-panel" id="selector-probe-panel-alerts" role="tabpanel" aria-labelledby="selector-probe-tab-alerts" data-selector-probe-panel="alerts" hidden>
-              <div class="selector-operation-header">
-                <div><h3>告警中心</h3><p class="muted">确认告警只记录归属，不清除策略闸门；底层闸门生效时禁止人工解决。</p></div>
-                <span id="selector-alert-status" class="muted" role="status" aria-live="polite"></span>
-              </div>
-              <div id="selector-alert-counts" class="selector-summary-grid selector-operation-summary"></div>
-              <div id="selector-alert-rows" class="selector-operation-list"></div>
-            </section>
-            <section class="selector-probe-panel" id="selector-probe-panel-settings" role="tabpanel" aria-labelledby="selector-probe-tab-settings" data-selector-probe-panel="settings" hidden>
-              <div class="selector-operation-header">
-                <div><h3>探针设置</h3><p class="muted">操作员只读；管理员危险变更需原因、预检与二次确认。</p></div>
-                <span id="selector-settings-status" class="muted" role="status" aria-live="polite"></span>
-              </div>
-              <form id="selector-settings-form" class="selector-settings-form">
-                <section class="selector-settings-card">
-                  <h4>基本设置</h4>
-                  <div id="selector-settings-basic" class="selector-detail-list"></div>
-                  <div class="grid">
-                    <label><input name="enabled" type="checkbox" data-selector-settings-editable> 启用探针</label>
-                    <label>Rollout
-                      <select name="rolloutMode" data-selector-settings-editable><option value="observe">observe</option><option value="publish">publish</option><option value="enforce">enforce</option></select>
-                    </label>
-                    <label>每日时间<input name="scheduleTime" type="time" data-selector-settings-editable></label>
-                    <label>目标 Origin<input name="targetOrigin" type="url" data-selector-settings-editable></label>
-                    <label>新鲜度（小时）<input name="freshnessHours" type="number" min="1" data-selector-settings-editable></label>
-                  </div>
-                </section>
-	                <section class="selector-settings-card">
-	                  <h4>独立 AdsPower 测试 Profiles</h4>
-	                  <div id="selector-settings-profiles" class="selector-detail-list"></div>
-	                  <p class="muted">仅显示脱敏标识；至少两个独立 Profile 才能进入 enforce。</p>
-	                  <label>新增 Profile IDs（每行一个，暂存后仅显示掩码）
-	                    <textarea name="profileAdd" rows="4" autocomplete="off" data-selector-settings-editable></textarea>
-	                  </label>
-	                  <div class="actions">
-	                    <button id="selector-settings-profile-stage" type="button" data-selector-settings-editable>加入暂存列表</button>
-	                    <button id="selector-settings-profile-import" type="button" data-selector-settings-editable>导入当前已选 Profiles</button>
-	                  </div>
-	                  <div id="selector-settings-profile-staged" class="selector-detail-list"></div>
-	                </section>
-                <section class="selector-settings-card">
-                  <h4>修正模型</h4>
-                  <div id="selector-settings-model" class="selector-detail-list"></div>
-                  <label>模型 ID<input name="modelId" data-selector-settings-editable></label>
-                  <label>设置 API Key（留空保持不变）<input name="modelApiKey" type="password" autocomplete="new-password" data-selector-settings-editable></label>
-                  <button class="danger" type="button" data-settings-secret-clear="model_api_key" data-selector-settings-editable>独立清除 API Key</button>
-                </section>
-                <section class="selector-settings-card">
-                  <h4>Redis</h4>
-                  <div id="selector-settings-redis" class="selector-detail-list"></div>
-                  <label>Namespace<input name="redisNamespace" data-selector-settings-editable></label>
-                  <label>设置密码（留空保持不变）<input name="redisPassword" type="password" autocomplete="new-password" data-selector-settings-editable></label>
-                  <button class="danger" type="button" data-settings-secret-clear="redis_password" data-selector-settings-editable>独立清除 Redis 密码</button>
-                </section>
-                <section class="selector-settings-card">
-                  <h4>Webhook</h4>
-                  <div id="selector-settings-webhook" class="selector-detail-list"></div>
-                  <div class="grid">
-                    <label><input name="webhookEnabled" type="checkbox" data-selector-settings-editable> 启用 Webhook</label>
-                    <label>类型<select name="webhookType" data-selector-settings-editable><option value="generic">generic</option><option value="slack">slack</option><option value="dingtalk">dingtalk</option></select></label>
-                    <label>设置 URL（留空保持不变）<input name="webhookUrl" type="password" autocomplete="new-password" data-selector-settings-editable></label>
-                    <label>设置签名秘密（留空保持不变）<input name="webhookSigningSecret" type="password" autocomplete="new-password" data-selector-settings-editable></label>
-                  </div>
-                  <button class="danger" type="button" data-settings-secret-clear="webhook_signing_secret" data-selector-settings-editable>独立清除签名秘密</button>
-                  <button id="selector-settings-webhook-test" type="button">发送 Synthetic 测试</button>
-                </section>
-                <section class="selector-settings-card">
-                  <h4>权限与账户</h4>
-                  <div id="selector-settings-permissions" class="selector-detail-list"></div>
-                  <label>危险变更原因<textarea name="reason" maxlength="500" data-selector-settings-editable></textarea></label>
-	                  <div class="selector-operation-actions">
-	                    <button id="selector-settings-preflight" type="button">运行 Enforce 预检</button>
-	                    <button id="selector-settings-save" class="primary" type="button">检查并保存</button>
-	                    <button id="selector-settings-reload" type="button" hidden>重新加载最新设置</button>
-	                  </div>
-	                  <p id="selector-settings-save-status" class="bad" role="status" aria-live="polite"></p>
-                  <div class="selector-account-header">
-                    <h5>管理账户</h5>
-                    <button id="selector-account-add" type="button">新增账户</button>
-                  </div>
-                  <div id="selector-account-create-form" class="selector-account-create" hidden>
-                    <label>用户名<input name="username" autocomplete="off"></label>
-                    <label>角色<select name="role"><option value="operator">operator</option><option value="administrator">administrator</option></select></label>
-                    <button id="selector-account-create-submit" type="button">创建并生成临时密码</button>
-                  </div>
-                  <p id="selector-account-status" class="selector-probe-page-status" role="status" aria-live="polite"></p>
-                  <div id="selector-account-rows" class="selector-operation-list"></div>
-                </section>
-              </form>
-            </section>
-
-            <dialog id="selector-operation-confirm-dialog" class="selector-element-dialog selector-operation-dialog">
-              <form id="selector-operation-confirm-form">
-                <div class="dialog-header">
-                  <div><span class="muted">危险操作确认</span><h3 id="selector-operation-confirm-title">确认操作</h3></div>
-                  <button id="selector-operation-confirm-close" class="icon-button" type="button" aria-label="关闭">×</button>
-                </div>
-                <p id="selector-operation-confirm-target"></p>
-                <p id="selector-operation-confirm-outcome" class="selector-operation-notice"></p>
-	                <label id="selector-operation-reason-label"><span id="selector-operation-reason-text">原因</span>
-	                  <textarea id="selector-operation-reason" name="reason" maxlength="500" required></textarea>
-	                </label>
-                <p id="selector-operation-confirm-error" class="bad" role="status" aria-live="polite"></p>
-                <div class="dialog-actions">
-                  <button id="selector-operation-confirm-cancel" type="button">取消</button>
-                  <button id="selector-operation-confirm-submit" class="primary" type="submit">确认</button>
-                </div>
-              </form>
-            </dialog>
-
-            <dialog id="selector-operation-detail-dialog" class="selector-element-dialog selector-operation-dialog">
-              <div class="dialog-header">
-                <div><span class="muted">只读运维详情</span><h3 id="selector-operation-detail-title">详情</h3></div>
-                <button id="selector-operation-detail-close" class="icon-button" type="button" aria-label="关闭">×</button>
-              </div>
-              <div id="selector-operation-detail-body" class="selector-operation-list"></div>
-              <section id="selector-run-stage-detail" class="selector-run-stage-list"></section>
-              <section id="selector-run-discoveries" class="selector-discovery-list"></section>
-              <p id="selector-operation-detail-error" class="bad" role="status" aria-live="polite"></p>
-              <div id="selector-operation-detail-actions" class="dialog-actions"></div>
-            </dialog>
-
-            <dialog id="selector-temporary-password-dialog" class="selector-element-dialog selector-operation-dialog">
-              <div class="dialog-header">
-                <div><span class="muted">仅显示一次</span><h3>临时密码</h3></div>
-                <button id="selector-temporary-password-close" class="icon-button" type="button" aria-label="关闭">×</button>
-              </div>
-              <p id="selector-temporary-password-user"></p>
-              <code id="selector-temporary-password-value" class="selector-temporary-password"></code>
-              <p class="muted">关闭后将从页面和 JavaScript 状态中清除，无法再次查看。</p>
-              <div class="dialog-actions">
-                <button id="selector-temporary-password-copy" type="button">复制</button>
-                <button id="selector-temporary-password-done" class="primary" type="button">已保存并关闭</button>
-              </div>
-            </dialog>
-          </div>
-        </section>
-      </section>
+      {% include '_selector_probe_console.html' %}
     </main>
   </div>
 
+  <script src="/static/selector_inventory_ui.js"></script>
   <script src="/static/selector_probe_ui.js"></script>
   <script>
     const panels = [...document.querySelectorAll(".panel")];
@@ -5998,6 +5422,44 @@ def build_strategy_text_resolver(data_dir, *, rng=None):
     return resolve
 
 
+def build_execution_v2_content_library_provider(data_dir):
+    """Expose existing copy-library metadata through the closed V2 contract."""
+
+    async def provide():
+        brands = await asyncio.to_thread(list_brands, data_dir)
+        return [
+            {
+                "id": str(item.get("id") or "").strip(),
+                "name": str(item.get("name") or "").strip(),
+                "copy_count": item.get("copy_count", 0),
+            }
+            for item in brands
+            if isinstance(item, dict) and str(item.get("id") or "").strip()
+        ]
+
+    return provide
+
+
+def build_execution_v2_text_resolver(data_dir, *, rng=None):
+    """Select one existing library item independently for each V2 input action."""
+
+    from execution_v2.actions import ActionExecutionError
+
+    rng = rng or random.Random()
+
+    async def resolve(action):
+        library_id = str(action.get("content_library_id") or "").strip()
+        if not library_id:
+            raise ActionExecutionError("content_library_unavailable")
+        values = await asyncio.to_thread(list_copy_items, data_dir, library_id)
+        texts = strategy_comment_texts(values)
+        if not texts:
+            raise ActionExecutionError("content_library_unavailable")
+        return rng.choice(texts)
+
+    return resolve
+
+
 def update_browser_batch_task(task_id, **updates):
     with BROWSER_BATCH_TASKS_LOCK:
         task = BROWSER_BATCH_TASKS.get(task_id)
@@ -7124,8 +6586,27 @@ def select_publish_accounts(accounts, account_ids):
     return selected
 
 
+def _local_direct_mode_enabled(config: dict | None) -> bool:
+    """Config wins; environment accepts only explicit local-direct values."""
+
+    if config is not None and "LOCAL_DIRECT_MODE" in config:
+        value = config["LOCAL_DIRECT_MODE"]
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            return value.strip().casefold() in {"1", "true", "yes", "on"}
+        return False
+    return os.getenv("LOCAL_DIRECT_MODE", "").strip().casefold() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
 def create_app(config: dict | None = None) -> Flask:
     app = Flask(__name__)
+    local_direct_mode = _local_direct_mode_enabled(config)
     explicit_gate_factory = bool(
         config and "SELECTOR_PROBE_GATE_SERVICE_FACTORY" in config
     )
@@ -7154,24 +6635,51 @@ def create_app(config: dict | None = None) -> Flask:
         "SELECTOR_PROBE_RUN_DISPATCHER",
         default_selector_probe_dispatcher,
     )
-    app.config.setdefault(
-        "SELECTOR_PROBE_ELEMENT_REQUEST_DISPATCHER",
-        None,
-    )
-    app.config.setdefault(
-        "SELECTOR_PROBE_LEGACY_ELEMENTS_PROVIDER",
-        default_selector_probe_legacy_elements_provider,
-    )
     if config:
         app.config.update(config)
-    app.config.setdefault("MANAGEMENT_STATE_DIR", Path("data"))
+    app.config["LOCAL_DIRECT_MODE"] = local_direct_mode
+    app.config.setdefault("SERVER_PORT", 5000)
     app.config.setdefault(
-        "MANAGEMENT_DB_PATH",
-        Path(app.config["MANAGEMENT_STATE_DIR"]) / "management.db",
+        "EXECUTION_V2_DB_PATH",
+        Path(__file__).resolve().parents[1]
+        / "data"
+        / "execution_v2"
+        / "execution_v2.db",
     )
+    app.config.setdefault(
+        "EXECUTION_V2_EVIDENCE_DIR",
+        Path(__file__).resolve().parents[1] / "data" / "execution_v2" / "evidence",
+    )
+    app.config.setdefault("EXECUTION_V2_SERVICE_FACTORY", None)
+    app.config.setdefault(
+        "COMMENT_CAMPAIGN_DB_URL",
+        "sqlite:///data/comment_campaign/comment_campaign.db",
+    )
+    app.config.setdefault(
+        "COMMENT_CAMPAIGN_EVIDENCE_DIR",
+        "data/comment_campaign/evidence",
+    )
+    app.config.setdefault(
+        "COMMENT_CAMPAIGN_REDIS_URL",
+        os.getenv(
+            "COMMENT_CAMPAIGN_REDIS_URL",
+            os.getenv("CELERY_BROKER_URL", "redis://127.0.0.1:6379/0"),
+        ),
+    )
+    app.config.setdefault("COMMENT_CAMPAIGN_SERVICE_FACTORY", None)
+    if not local_direct_mode:
+        app.config.setdefault("MANAGEMENT_STATE_DIR", Path("data"))
+        app.config.setdefault(
+            "MANAGEMENT_DB_PATH",
+            Path(app.config["MANAGEMENT_STATE_DIR"]) / "management.db",
+        )
     app.config.update(
-        SECRET_KEY=load_or_create_session_key(
-            Path(app.config["MANAGEMENT_STATE_DIR"]) / "session.key"
+        SECRET_KEY=(
+            secrets.token_urlsafe(48)
+            if local_direct_mode
+            else load_or_create_session_key(
+                Path(app.config["MANAGEMENT_STATE_DIR"]) / "session.key"
+            )
         ),
         SESSION_COOKIE_HTTPONLY=True,
         SESSION_COOKIE_SAMESITE="Lax",
@@ -7205,32 +6713,277 @@ def create_app(config: dict | None = None) -> Flask:
         "TIKTOK_STATS_EXISTING_ACCOUNTS_DB_PATH", app.config["ACCOUNTS_DB_PATH"]
     )
 
-    def management_auth_service_factory():
-        service = g.get("management_auth_service")
+    if not local_direct_mode:
+        def management_auth_service_factory():
+            service = g.get("management_auth_service")
+            if service is None:
+                connection = open_management_db(
+                    Path(app.config["MANAGEMENT_DB_PATH"])
+                )
+                g.management_auth_connection = connection
+                service = AuthService(AuthStore(connection))
+                g.management_auth_service = service
+            return service
+
+        @app.teardown_appcontext
+        def close_management_auth_connection(_error):
+            connection = g.pop("management_auth_connection", None)
+            g.pop("management_auth_service", None)
+            if connection is not None:
+                connection.close()
+
+        app.extensions["management_auth_service_factory"] = (
+            management_auth_service_factory
+        )
+    register_tiktok_stats_error_handler(app)
+    if local_direct_mode:
+        install_local_only_guard(app)
+
+        @app.before_request
+        def ensure_local_direct_csrf():
+            csrf_token = session.get("csrf_token")
+            if not isinstance(csrf_token, str) or not csrf_token:
+                session["csrf_token"] = secrets.token_urlsafe(32)
+    else:
+        app.register_blueprint(
+            create_auth_blueprint(management_auth_service_factory)
+        )
+        install_management_guard(app, management_auth_service_factory)
+
+    execution_v2_lock = threading.Lock()
+
+    def execution_v2_service_factory():
+        service = app.extensions.get("execution_v2_service")
         if service is None:
-            connection = open_management_db(
-                Path(app.config["MANAGEMENT_DB_PATH"])
-            )
-            g.management_auth_connection = connection
-            service = AuthService(AuthStore(connection))
-            g.management_auth_service = service
+            with execution_v2_lock:
+                service = app.extensions.get("execution_v2_service")
+                if service is None:
+                    configured_factory = app.config["EXECUTION_V2_SERVICE_FACTORY"]
+                    if configured_factory is None:
+                        from execution_v2.service import create_default_execution_v2_service
+
+                        adspower_settings = load_settings().get("adspower", {})
+                        controller = AdsPowerController(
+                            base_url=(
+                                adspower_settings.get("base_url")
+                                or os.getenv("ADSPOWER_BASE_URL")
+                            ),
+                            api_key=(
+                                adspower_settings.get("api_key")
+                                or os.getenv("ADSPOWER_API_KEY", "")
+                            ),
+                        )
+                        service = create_default_execution_v2_service(
+                            db_path=app.config["EXECUTION_V2_DB_PATH"],
+                            evidence_dir=app.config["EXECUTION_V2_EVIDENCE_DIR"],
+                            controller=controller,
+                            content_library_provider=(
+                                build_execution_v2_content_library_provider(
+                                    app.config["CONTENT_DATA_DIR"]
+                                )
+                            ),
+                            text_resolver=build_execution_v2_text_resolver(
+                                app.config["CONTENT_DATA_DIR"]
+                            ),
+                        )
+                    else:
+                        service = configured_factory()
+                    app.extensions["execution_v2_service"] = service
         return service
 
-    @app.teardown_appcontext
-    def close_management_auth_connection(_error):
-        connection = g.pop("management_auth_connection", None)
-        g.pop("management_auth_service", None)
-        if connection is not None:
-            connection.close()
+    def close_execution_v2_service():
+        with execution_v2_lock:
+            service = app.extensions.pop("execution_v2_service", None)
+            close = getattr(service, "close", None)
+            if callable(close):
+                close()
 
-    app.extensions["management_auth_service_factory"] = (
-        management_auth_service_factory
+    app.extensions["execution_v2_service_factory"] = execution_v2_service_factory
+    app.extensions["execution_v2_close"] = close_execution_v2_service
+    app.register_blueprint(create_browser_v2_blueprint(execution_v2_service_factory))
+
+    comment_campaign_lock = threading.Lock()
+
+    def comment_campaign_service_factory():
+        service = app.extensions.get("comment_campaign_service")
+        if service is None:
+            with comment_campaign_lock:
+                service = app.extensions.get("comment_campaign_service")
+                if service is None:
+                    configured_factory = app.config["COMMENT_CAMPAIGN_SERVICE_FACTORY"]
+                    if configured_factory is None:
+                        from comment_campaign.service import (
+                            create_default_comment_campaign_service,
+                        )
+                        from comment_campaign.queueing import QueueCoordinator
+
+                        adspower_settings = load_settings().get("adspower", {})
+                        controller = AdsPowerController(
+                            base_url=(
+                                adspower_settings.get("base_url")
+                                or os.getenv("ADSPOWER_BASE_URL")
+                            ),
+                            api_key=(
+                                adspower_settings.get("api_key")
+                                or os.getenv("ADSPOWER_API_KEY", "")
+                            ),
+                        )
+                        health_controller = AdsPowerController(
+                            base_url=(
+                                adspower_settings.get("base_url")
+                                or os.getenv("ADSPOWER_BASE_URL")
+                            ),
+                            api_key=(
+                                adspower_settings.get("api_key")
+                                or os.getenv("ADSPOWER_API_KEY", "")
+                            ),
+                            timeout=1.0,
+                            max_retries=1,
+                            retry_delay=0,
+                        )
+
+                        def adspower_probe():
+                            list_one = getattr(health_controller, "list_profiles", None)
+                            if callable(list_one):
+                                list_one(page=1, page_size=1)
+                                return []
+                            list_all = getattr(
+                                health_controller, "list_all_profiles", None
+                            )
+                            if not callable(list_all):
+                                raise RuntimeError("adspower probe unavailable")
+                            try:
+                                list_all(max_profiles=1)
+                            except TypeError:
+                                list_all()
+                            return []
+
+                        def profile_provider():
+                            list_all = getattr(controller, "list_all_profiles", None)
+                            if callable(list_all):
+                                profiles = list_all()
+                            else:
+                                profiles = controller.list_profiles()
+                            return [
+                                {
+                                    "id": str(item.get("id") or ""),
+                                    "name": str(item.get("name") or ""),
+                                    "status": str(item.get("status") or ""),
+                                }
+                                for item in profiles
+                                if isinstance(item, dict)
+                            ]
+
+                        def content_resolver(library_id):
+                            return [
+                                {
+                                    "content_item_id": str(item.get("id") or ""),
+                                    "text": compose_text(item),
+                                }
+                                for item in list_copy_items(
+                                    app.config["CONTENT_DATA_DIR"], library_id
+                                )
+                                if isinstance(item, dict)
+                            ]
+
+                        def publish_result_resolver(reference):
+                            for item in public_publish_tasks(
+                                app.config["CONTENT_DATA_DIR"]
+                            ):
+                                if (
+                                    str(item.get("id") or "") == reference
+                                    and item.get("status") == "success"
+                                    and str(item.get("tiktok_url") or "").strip()
+                                ):
+                                    return str(item.get("tiktok_url") or "")
+                            return ""
+
+                        def comment_settings_provider():
+                            settings = load_settings()
+                            campaign = settings.get("comment_campaign", {})
+                            return campaign if isinstance(campaign, dict) else {}
+
+                        def comment_settings_updater(expected_revision, bindings):
+                            from comment_campaign.errors import RevisionConflictError
+                            from comment_campaign.errors import CampaignValidationError
+                            from execution_v2.store import ExecutionStore
+
+                            required_kinds = {
+                                "entry_element_id": "click",
+                                "input_element_id": "input",
+                                "submit_element_id": "click",
+                                "account_element_id": "click",
+                            }
+                            element_store = ExecutionStore(
+                                app.config["EXECUTION_V2_DB_PATH"]
+                            )
+                            try:
+                                element_store.initialize()
+                                for name, kind in required_kinds.items():
+                                    element = element_store.get_element(bindings[name])
+                                    if (
+                                        not isinstance(element, dict)
+                                        or element.get("status") != "active"
+                                        or element.get("kind") != kind
+                                    ):
+                                        raise CampaignValidationError("comment_panel_not_ready")
+                            finally:
+                                # ExecutionStore currently opens short-lived SQLite sessions per
+                                # call.  Keep this defensive close so a future persistent store
+                                # implementation cannot leak from a settings request.
+                                close = getattr(element_store, "close", None)
+                                if callable(close):
+                                    close()
+
+                            result = {}
+
+                            def persist(settings):
+                                campaign = settings.get("comment_campaign", {})
+                                campaign = dict(campaign) if isinstance(campaign, dict) else {}
+                                current = campaign.get("revision", 1)
+                                current = current if type(current) is int and current >= 1 else 1
+                                if current != expected_revision:
+                                    raise RevisionConflictError("comment-settings")
+                                campaign["element_bindings"] = dict(bindings)
+                                campaign["revision"] = current + 1
+                                settings["comment_campaign"] = campaign
+                                result.update(campaign)
+                                return settings
+
+                            mutate_settings(persist)
+                            return result
+
+                        service = create_default_comment_campaign_service(
+                            database_url=app.config["COMMENT_CAMPAIGN_DB_URL"],
+                            profile_provider=profile_provider,
+                            content_resolver=content_resolver,
+                            publish_result_resolver=publish_result_resolver,
+                            queue_coordinator=QueueCoordinator.from_url(
+                                app.config["COMMENT_CAMPAIGN_REDIS_URL"]
+                            ),
+                            settings_provider=comment_settings_provider,
+                            adspower_probe=adspower_probe,
+                            settings_updater=comment_settings_updater,
+                        )
+                    else:
+                        service = configured_factory()
+                    app.extensions["comment_campaign_service"] = service
+        return service
+
+    def close_comment_campaign_service():
+        with comment_campaign_lock:
+            service = app.extensions.pop("comment_campaign_service", None)
+            close = getattr(service, "close", None)
+            if callable(close):
+                close()
+
+    app.extensions["comment_campaign_service_factory"] = (
+        comment_campaign_service_factory
     )
-    register_tiktok_stats_error_handler(app)
+    app.extensions["comment_campaign_close"] = close_comment_campaign_service
     app.register_blueprint(
-        create_auth_blueprint(management_auth_service_factory)
+        create_comment_campaign_blueprint(comment_campaign_service_factory)
     )
-    install_management_guard(app, management_auth_service_factory)
     app.register_blueprint(create_tiktok_stats_blueprint())
     app.register_blueprint(
         create_selector_probe_blueprint(
@@ -7243,12 +6996,6 @@ def create_app(config: dict | None = None) -> Flask:
             ],
             run_dispatcher=app.config[
                 "SELECTOR_PROBE_RUN_DISPATCHER"
-            ],
-            element_request_dispatcher=app.config[
-                "SELECTOR_PROBE_ELEMENT_REQUEST_DISPATCHER"
-            ],
-            legacy_elements_provider=app.config[
-                "SELECTOR_PROBE_LEGACY_ELEMENTS_PROVIDER"
             ],
         )
     )
@@ -7278,6 +7025,42 @@ def create_app(config: dict | None = None) -> Flask:
             active_nav="settings",
             csrf_token=session["csrf_token"],
         )
+
+    @app.get("/browser-v2")
+    def browser_v2_page():
+        return render_template("browser_v2.html")
+
+    @app.get("/comment-campaigns")
+    def comment_campaign_page():
+        return render_template(
+            "comment_campaign.html",
+            active_nav="comment-campaign",
+            csrf_token=session["csrf_token"],
+        )
+
+    @app.get("/evidence/<filename>")
+    def execution_v2_evidence(filename: str):
+        if re.fullmatch(r"[0-9a-f]{32}\.png", filename) is None:
+            abort(404)
+        return send_from_directory(
+            app.config["EXECUTION_V2_EVIDENCE_DIR"], filename
+        )
+
+    @app.get("/comment-campaign-evidence/<filename>")
+    def comment_campaign_evidence(filename: str):
+        if re.fullmatch(r"[0-9a-f]{32}\.png", filename) is None:
+            abort(404)
+        evidence_dir = Path(app.config["COMMENT_CAMPAIGN_EVIDENCE_DIR"]).resolve()
+        candidate = evidence_dir / filename
+        if (
+            candidate.is_symlink()
+            or not candidate.is_file()
+            or candidate.resolve().parent != evidence_dir
+        ):
+            abort(404)
+        response = send_from_directory(evidence_dir, filename)
+        response.cache_control.no_store = True
+        return response
 
     @app.get("/ping")
     def ping():

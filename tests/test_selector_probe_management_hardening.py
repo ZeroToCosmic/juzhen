@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import copy
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 import json
 from pathlib import Path
 import re
@@ -22,18 +22,6 @@ from selector_probe.store import SelectorProbeStore
 def _settings() -> dict:
     return {
         "browser": {"task_goal": "legacy-compatible"},
-        "models": {
-            "default_model_id": "repair-model",
-            "items": [
-                {
-                    "id": "repair-model",
-                    "provider": "openai",
-                    "mode": "repair_only",
-                    "enabled": True,
-                    "api_key": "configured-model-key",
-                }
-            ],
-        },
         "selector_probe": {
             "enabled": True,
             "site": "tiktok",
@@ -50,7 +38,6 @@ def _settings() -> dict:
                 "profile-alpha": "healthy",
                 "profile-beta": "healthy",
             },
-            "model_id": "repair-model",
             "rollout_mode": "publish",
             "observe_only": False,
             "redis": {
@@ -118,13 +105,6 @@ def _probe_app(
             ),
             settings_provider=provider,
             settings_mutator=mutator,
-            settings_preflight_runner=lambda _raw, _candidate: {
-                "profiles": "passed",
-                "redis_aof": "passed",
-                "redis_eviction": "passed",
-                "model": "passed",
-                "webhook": "passed",
-            },
             run_dispatcher=run_dispatcher
             or (lambda request_id, _done: {
                 "status": "accepted",
@@ -158,7 +138,6 @@ def _ui_candidate(value: dict) -> dict:
             }
             for item in value["profiles"]
         ],
-        "model": {"id": value["model"]["id"]},
         "redis": {"namespace": value["redis"]["namespace"]},
         "webhook": {
             "enabled": value["webhook"]["enabled"],
@@ -189,38 +168,20 @@ def _assert_terminal_replay(client, path: str, payload: dict) -> None:
     assert replay.get_json() != {"code": "operation_in_progress"}
 
 
-def _insert_publication_blocker(
-    store: SelectorProbeStore,
-    blocker: str,
-) -> None:
+def _insert_publication_blocker(store: SelectorProbeStore) -> None:
     now = datetime.now(UTC).isoformat()
-    if blocker == "publication_outbox":
-        store.connection.execute(
-            """
-            INSERT INTO publication_outbox (
-                event_type, aggregate_id, payload_json, status,
-                next_attempt_at, created_at
-            ) VALUES (
-                'selector_version_publish', 'sel-pending', '{}',
-                'pending', ?, ?
-            )
-            """,
-            (now, now),
+    store.connection.execute(
+        """
+        INSERT INTO publication_outbox (
+            event_type, aggregate_id, payload_json, status,
+            next_attempt_at, created_at
+        ) VALUES (
+            'selector_version_publish', 'sel-pending', '{}',
+            'pending', ?, ?
         )
-    else:
-        store.connection.execute(
-            """
-            INSERT INTO element_request_outbox (
-                request_id, request_type, element_id, expected_revision,
-                contract_json, actor_user_id, actor_username, status,
-                next_attempt_at, created_at, updated_at
-            ) VALUES (
-                'request-publishing', 'probe', 'comment-submit', 1,
-                '{}', 7, 'admin', 'publishing', ?, ?, ?
-            )
-            """,
-            (now, now, now),
-        )
+        """,
+        (now, now),
+    )
     store.connection.commit()
 
 
@@ -232,8 +193,7 @@ def test_management_idempotency_database_never_stores_submitted_secrets_or_url(
     client = _probe_app(database, settings).test_client()
     candidate = _candidate(client)
     submitted = {
-        "model_api_key": "MODEL_SECRET_4f8f0e",
-        "redis_password": "REDIS_SECRET_91ac72",
+            "redis_password": "REDIS_SECRET_91ac72",
         "webhook_signing_secret": "WEBHOOK_SECRET_764fd1",
         "webhook_url": (
             "https://hooks.example.test/"
@@ -291,20 +251,8 @@ def test_reserved_settings_failures_replay_terminal_response_not_pending(
         client, "/api/selector-probe/settings", missing_reason
     )
 
-    enforce_candidate = _ui_candidate(current)
-    enforce_candidate["rollout_mode"] = "enforce"
-    missing_preflight = {
-        "expected_revision": 0,
-        "reason": "enable enforce",
-        "idempotency_key": "terminal-preflight",
-        "settings": enforce_candidate,
-    }
-    _assert_terminal_replay(
-        client, "/api/selector-probe/settings", missing_preflight
-    )
-
     with SelectorProbeStore(database) as store:
-        _insert_publication_blocker(store, "publication_outbox")
+        _insert_publication_blocker(store)
     mode_candidate = _ui_candidate(current)
     mode_candidate["rollout_mode"] = "observe"
     publication = {
@@ -320,7 +268,6 @@ def test_reserved_settings_failures_replay_terminal_response_not_pending(
     for key in (
         "terminal-stale",
         "terminal-reason",
-        "terminal-preflight",
         "terminal-publication",
     ):
         assert _cache_row(database, key)["state"] == "failed"
@@ -713,25 +660,21 @@ def test_generic_settings_and_restore_cannot_modify_probe_controlled_state(
     assert final["selector_probe"]["rollout_mode"] == "enforce"
 
 
-@pytest.mark.parametrize(
-    "blocker",
-    ["publication_outbox", "element_request_publishing"],
-)
-def test_mode_switch_is_blocked_by_all_publication_work(tmp_path, blocker):
-    database = tmp_path / f"{blocker}.db"
+def test_mode_switch_is_blocked_by_pending_publication(tmp_path):
+    database = tmp_path / "publication_outbox.db"
     settings = _settings()
     client = _probe_app(database, settings).test_client()
     candidate = _ui_candidate(_candidate(client))
     candidate["rollout_mode"] = "observe"
     with SelectorProbeStore(database) as store:
-        _insert_publication_blocker(store, blocker)
+        _insert_publication_blocker(store)
 
     response = client.patch(
         "/api/selector-probe/settings",
         json={
             "expected_revision": 0,
             "reason": "mode switch must wait",
-            "idempotency_key": f"mode-blocker-{blocker}",
+            "idempotency_key": "mode-blocker-publication",
             "settings": candidate,
         },
     )
@@ -740,7 +683,7 @@ def test_mode_switch_is_blocked_by_all_publication_work(tmp_path, blocker):
         json={
             "expected_revision": 0,
             "reason": "mode switch must wait",
-            "idempotency_key": f"mode-blocker-{blocker}",
+            "idempotency_key": "mode-blocker-publication",
             "settings": candidate,
         },
     )
@@ -749,87 +692,8 @@ def test_mode_switch_is_blocked_by_all_publication_work(tmp_path, blocker):
     assert response.get_json()["code"] == "publication_in_progress"
     assert replay.get_json() == response.get_json()
     assert _cache_row(
-        database, f"mode-blocker-{blocker}"
+        database, "mode-blocker-publication"
     )["state"] == "failed"
-
-
-def test_preflight_health_requires_matching_revision_fingerprint_and_ttl(
-    tmp_path,
-):
-    database = tmp_path / "probe.db"
-    now = datetime(2026, 7, 29, 3, 0, tzinfo=UTC)
-    settings = _settings()
-    settings["selector_probe"].pop("profile_health")
-    client = _probe_app(
-        database,
-        settings,
-        utcnow_fn=lambda: now,
-    ).test_client()
-    current = _candidate(client)
-    preflight = client.post(
-        "/api/selector-probe/settings/preflight",
-        json={
-            "expected_revision": 0,
-            "candidate_fingerprint": "fnv1a-ui-contract",
-            "settings": _ui_candidate(current),
-        },
-    )
-    assert preflight.status_code == 200
-    healthy = client.get("/api/selector-probe/settings").get_json()
-    assert [item["status"] for item in healthy["profiles"]] == [
-        "healthy",
-        "healthy",
-    ]
-
-    with SelectorProbeStore(database) as store:
-        saved = store.management_preflight_health(
-            "tiktok:production"
-        )
-        canonical = saved["canonical_fingerprint"]
-        store.bump_resource_revision("settings")
-    stale_revision = client.get(
-        "/api/selector-probe/settings"
-    ).get_json()
-    assert [item["status"] for item in stale_revision["profiles"]] == [
-        "unknown",
-        "unknown",
-    ]
-
-    with SelectorProbeStore(database) as store:
-        store.save_management_preflight_health(
-            "tiktok:production",
-            {
-                "checks": saved["checks"],
-                "profiles": saved["profiles"],
-                "base_revision": 1,
-                "canonical_fingerprint": "wrong-fingerprint",
-            },
-            checked_at=now.isoformat(),
-        )
-    wrong_fingerprint = client.get(
-        "/api/selector-probe/settings"
-    ).get_json()
-    assert [item["status"] for item in wrong_fingerprint["profiles"]] == [
-        "unknown",
-        "unknown",
-    ]
-
-    with SelectorProbeStore(database) as store:
-        store.save_management_preflight_health(
-            "tiktok:production",
-            {
-                "checks": saved["checks"],
-                "profiles": saved["profiles"],
-                "base_revision": 1,
-                "canonical_fingerprint": canonical,
-            },
-            checked_at=(now - timedelta(seconds=601)).isoformat(),
-        )
-    expired = client.get("/api/selector-probe/settings").get_json()
-    assert [item["status"] for item in expired["profiles"]] == [
-        "unknown",
-        "unknown",
-    ]
 
 
 def test_redis_busy_response_exposes_valid_active_run_id():
@@ -855,30 +719,3 @@ def test_redis_busy_response_exposes_valid_active_run_id():
         "status": "busy",
         "active_run_id": "active-run_20260729",
     }
-
-
-def test_backend_accepts_exact_ui_preflight_json_contract(tmp_path):
-    database = tmp_path / "probe.db"
-    client = _probe_app(database, _settings()).test_client()
-    candidate = _ui_candidate(_candidate(client))
-    body = {
-        "expected_revision": 0,
-        "candidate_fingerprint": "fnv1a-7d9e2c4a",
-        "settings": candidate,
-    }
-
-    response = client.post(
-        "/api/selector-probe/settings/preflight",
-        json=body,
-    )
-
-    assert response.status_code == 200
-    payload = response.get_json()
-    assert payload["base_revision"] == body["expected_revision"]
-    assert (
-        payload["candidate_fingerprint"]
-        == body["candidate_fingerprint"]
-    )
-    assert payload["preflight_token"]
-    assert payload["checked_at"]
-    assert payload["status"] == "passed"

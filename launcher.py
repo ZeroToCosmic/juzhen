@@ -245,6 +245,37 @@ class FlaskServiceSupervisor:
             handle.close()
 
 
+class CommentCampaignWorkerSupervisor(FlaskServiceSupervisor):
+    """Own the RQ Campaign worker process and its log handle."""
+
+    def __init__(self, popen_factory=None, log_path: Path | None = None):
+        super().__init__(
+            popen_factory=popen_factory,
+            log_path=log_path or SERVICE_LOG_DIR / "comment-campaign-worker.log",
+        )
+
+    def start(self, *, environment=None):
+        with self._lock:
+            if self._process is not None and self._process.poll() is None:
+                return self._process
+            env = os.environ.copy() if environment is None else dict(environment)
+            self._open_log()
+            try:
+                self._process = self._popen(
+                    [sys.executable, "-m", "comment_campaign.worker", "serve"],
+                    cwd=PROJECT_ROOT,
+                    env=env,
+                    stdout=self._log_handle,
+                    stderr=self._log_handle,
+                    **hidden_process_options(),
+                )
+            except Exception:
+                self._close_log_handle()
+                raise
+            self._last_returncode = None
+            return self._process
+
+
 class StatisticsWorkerSupervisor:
     """Own exactly one separate statistics worker process."""
 
@@ -868,6 +899,7 @@ class LauncherApp:
         self.flask_service = FlaskServiceSupervisor()
         self.statistics_worker = StatisticsWorkerSupervisor()
         self.selector_probe_worker = SelectorProbeWorkerSupervisor()
+        self.comment_campaign_worker = CommentCampaignWorkerSupervisor()
         self._restart_thread = None
         self._closing = False
         self._cancel_event = threading.Event()
@@ -968,20 +1000,24 @@ class LauncherApp:
         )
 
     def _automatic_start_failure_detail(self) -> str:
-        return (
+        detail = (
             "自动启动失败；"
             f"Flask 日志：{self.flask_service.log_path}；"
             f"统计服务日志：{self.statistics_worker.log_path}；"
             f"探针服务日志：{self.selector_probe_worker.log_path}"
         )
+        detail += f"；评论 Campaign Worker 日志：{self.comment_campaign_worker.log_path}"
+        return detail
 
     def _stop_services_best_effort(self) -> bool:
         stopped_cleanly = True
-        for service in (
+        services = [
             self.flask_service,
             self.statistics_worker,
             self.selector_probe_worker,
-        ):
+        ]
+        services.append(self.comment_campaign_worker)
+        for service in services:
             try:
                 service.stop()
             except Exception:
@@ -1143,6 +1179,7 @@ class LauncherApp:
         environment = os.environ.copy()
         environment.setdefault("PUBLISH_WORKER_ENABLED", "1")
         environment.setdefault("APP_CONFIG_PATH", str(PROJECT_ROOT / "config.json"))
+        environment["LOCAL_DIRECT_MODE"] = "1"
         return environment
 
     def _wait_for_flask(self, process, timeout: float = 15) -> bool:
@@ -1210,6 +1247,13 @@ class LauncherApp:
         if probe_process is None:
             self._stop_services_best_effort()
             return False
+        campaign_process = self._start_service_if_active(
+            self.comment_campaign_worker,
+            environment=environment,
+        )
+        if campaign_process is None:
+            self._stop_services_best_effort()
+            return False
         if not self._wait_for_flask(flask_process):
             if self._cancel_requested():
                 self._stop_services_best_effort()
@@ -1252,6 +1296,18 @@ class LauncherApp:
                     probe_state,
                     "启动后立即退出",
                     self.selector_probe_worker.log_path,
+                )
+            )
+            return False
+        campaign_state = self.comment_campaign_worker.state()
+        if campaign_state["running"] is not True:
+            self._stop_services_best_effort()
+            self._report_startup_failure(
+                service_failure_detail(
+                    "评论 Campaign Worker",
+                    campaign_state,
+                    "启动后立即退出",
+                    self.comment_campaign_worker.log_path,
                 )
             )
             return False
