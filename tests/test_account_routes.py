@@ -155,7 +155,7 @@ def test_discover_accounts_writes_buffer_channels_and_masks_token(monkeypatch, t
             "buffer_profile_ids": ["channel-tiktok"],
         }
 
-    monkeypatch.setattr("gateway.app.discover_accounts", lambda db_path, account_id=None: {
+    monkeypatch.setattr("gateway.routes_accounts.discover_accounts", lambda db_path, account_id=None: {
         "count": 1,
         "results": [
             {
@@ -194,7 +194,7 @@ def test_import_buffer_accounts_endpoint_masks_token(monkeypatch, tmp_path):
     init_db(db_path)
 
     monkeypatch.setattr(
-        "gateway.app.import_buffer_accounts",
+        "gateway.routes_accounts.import_buffer_accounts",
         lambda db_path, accounts=None, raw_text="", discover_account=None: {
             "imported": 1,
             "saved_accounts": 1,
@@ -243,7 +243,7 @@ def test_import_buffer_accounts_endpoint_accepts_single_manual_account(
             "accounts": [{"buffer_token": "toke...-one"}],
         }
 
-    monkeypatch.setattr("gateway.app.import_buffer_accounts", fake_import)
+    monkeypatch.setattr("gateway.routes_accounts.import_buffer_accounts", fake_import)
 
     response = make_client(db_path).post(
         "/api/accounts/import",

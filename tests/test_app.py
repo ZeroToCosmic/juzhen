@@ -163,15 +163,11 @@ def execute_auto_strategy_with_layout(monkeypatch, tmp_path, layout):
         }
         for profile_id in ("profile-ok", "profile-fail")
     ]
-    monkeypatch.setattr(
-        app_module,
-        "ensure_browser_profile_sessions",
+    monkeypatch.setattr("gateway.browser_legacy.ensure_browser_profile_sessions",
         lambda _profiles, **_kwargs: (sessions, layout),
     )
     runtime_calls = []
-    monkeypatch.setattr(
-        app_module,
-        "prepare_browser_page",
+    monkeypatch.setattr("gateway.browser_legacy.prepare_browser_page",
         lambda _ws_url, url: {"current_url": url, "closed_tabs": 0, "stages": []},
     )
     monkeypatch.setattr(
@@ -643,7 +639,7 @@ def test_browser_execute_auto_strategy_starts_and_tiles_before_combined_executio
             events.append(("start", profile_id))
             return f"ws://secret-{profile_id}"
 
-    monkeypatch.setattr(app_module, "AdsPowerController", FakeController)
+    monkeypatch.setattr("gateway.browser_legacy.AdsPowerController", FakeController)
     monkeypatch.setattr("browser_cdp.wait_for_cdp", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(
         "window_tiler.tile_browser_windows",
@@ -749,7 +745,7 @@ def test_browser_execute_auto_strategy_isolates_session_start_failure(monkeypatc
         def stop_browser(self, _profile_id):
             return {"status": "stopped"}
 
-    monkeypatch.setattr(app_module, "AdsPowerController", FakeController)
+    monkeypatch.setattr("gateway.browser_legacy.AdsPowerController", FakeController)
     monkeypatch.setattr(app_module.time, "sleep", lambda _seconds: None)
     monkeypatch.setattr("browser_cdp.wait_for_cdp", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(
@@ -826,14 +822,10 @@ def test_browser_execute_auto_strategy_isolates_runtime_failure(monkeypatch, tmp
         }
         for profile_id in ("profile-ok", "profile-fail")
     ]
-    monkeypatch.setattr(
-        app_module,
-        "ensure_browser_profile_sessions",
+    monkeypatch.setattr("gateway.browser_legacy.ensure_browser_profile_sessions",
         lambda _profiles, **_kwargs: (sessions, {"layout": [], "missing": []}),
     )
-    monkeypatch.setattr(
-        app_module,
-        "prepare_browser_page",
+    monkeypatch.setattr("gateway.browser_legacy.prepare_browser_page",
         lambda _ws_url, url: {
             "current_url": url,
             "closed_tabs": 0,
@@ -920,17 +912,13 @@ def test_browser_routes_release_session_lease_when_executor_setup_fails(
         "error": "",
     }
     release_calls = []
-    monkeypatch.setattr(
-        app_module,
-        "ensure_browser_profile_sessions",
+    monkeypatch.setattr("gateway.browser_legacy.ensure_browser_profile_sessions",
         lambda _profiles, **_kwargs: (
             [session],
             window_tiler_result(["profile-1"]),
         ),
     )
-    monkeypatch.setattr(
-        app_module,
-        "release_browser_session_results",
+    monkeypatch.setattr("gateway.browser_legacy.release_browser_session_results",
         lambda results, *, request_close=False: release_calls.append(
             (results, request_close)
         ),
@@ -944,7 +932,7 @@ def test_browser_routes_release_session_lease_when_executor_setup_fails(
         def __init__(self, *_args, **_kwargs):
             raise RuntimeError("executor setup failed")
 
-    monkeypatch.setattr(app_module, "ThreadPoolExecutor", ExplodingExecutor)
+    monkeypatch.setattr("gateway.routes_browser.ThreadPoolExecutor", ExplodingExecutor)
     payload = {"windows": [{"profile_id": "profile-1"}]}
     if strategy_id:
         payload["strategy_id"] = strategy_id
@@ -974,8 +962,7 @@ def test_browser_read_routes_hold_lease_until_cdp_operation_finishes(
     finish_operation = threading.Event()
     stopped = []
     responses = []
-    monkeypatch.setattr(
-        app_module, "_stop_browser_profile", lambda profile_id: stopped.append(profile_id)
+    monkeypatch.setattr("gateway.browser_legacy._stop_browser_profile", lambda profile_id: stopped.append(profile_id)
     )
 
     def blocking_operation(*_args, **_kwargs):
@@ -984,7 +971,7 @@ def test_browser_read_routes_hold_lease_until_cdp_operation_finishes(
         return [] if endpoint.endswith("read-elements") else {"closed_tabs": 0}
 
     if dependency == "element_inspection":
-        monkeypatch.setattr(app_module, "inspect_browser_elements_on_cdp", blocking_operation)
+        monkeypatch.setattr("gateway.browser_legacy.inspect_browser_elements_on_cdp", blocking_operation)
     else:
         monkeypatch.setattr(dependency, blocking_operation)
     payload = {"windows": [{"profile_id": "profile-1"}]}
@@ -1045,7 +1032,7 @@ def test_browser_execute_manual_strategy_starts_profile_before_actions(monkeypat
             events.append(("start", profile_id))
             return f"ws://secret-{profile_id}"
 
-    monkeypatch.setattr(app_module, "AdsPowerController", FakeController)
+    monkeypatch.setattr("gateway.browser_legacy.AdsPowerController", FakeController)
     monkeypatch.setattr(
         "browser_actions.validate_action_config",
         lambda elements, strategies: (elements, strategies),
@@ -1166,9 +1153,7 @@ def test_browser_execute_strategy_rejects_invalid_auto_strategy_before_start(mon
         }
     )
     orchestrator_calls = []
-    monkeypatch.setattr(
-        app_module,
-        "ensure_browser_profile_sessions",
+    monkeypatch.setattr("gateway.browser_legacy.ensure_browser_profile_sessions",
         lambda profiles, **_kwargs: orchestrator_calls.append(profiles) or ([], None),
     )
 
@@ -1207,9 +1192,7 @@ def test_browser_execute_strategy_rejects_invalid_manual_strategy_before_start(
         }
     )
     orchestrator_calls = []
-    monkeypatch.setattr(
-        app_module,
-        "ensure_browser_profile_sessions",
+    monkeypatch.setattr("gateway.browser_legacy.ensure_browser_profile_sessions",
         lambda profiles, **_kwargs: orchestrator_calls.append(profiles) or ([], None),
     )
 
@@ -1330,9 +1313,7 @@ def test_public_browser_payload_masks_non_string_profile_id_as_one_string(
 
 def test_adspower_window_list_retains_full_profile_id_for_form_submission(monkeypatch):
     app_module = importlib.import_module("gateway.app")
-    monkeypatch.setattr(
-        app_module,
-        "fetch_adspower_windows",
+    monkeypatch.setattr("gateway.browser_legacy.fetch_adspower_windows",
         lambda: {"windows": [{"profile_id": "profile-k1dxxcto", "name": "Test"}]},
     )
 
@@ -1609,9 +1590,7 @@ def test_public_browser_payload_preserves_safe_credential_status(message):
 def test_open_tile_rejects_http_url_without_host(monkeypatch):
     app_module = importlib.import_module("gateway.app")
     orchestrator_calls = []
-    monkeypatch.setattr(
-        app_module,
-        "ensure_browser_profile_sessions",
+    monkeypatch.setattr("gateway.browser_legacy.ensure_browser_profile_sessions",
         lambda profiles, **_kwargs: orchestrator_calls.append(profiles) or ([], None),
     )
 
@@ -1654,7 +1633,7 @@ def test_browser_execute_strategy_reports_tile_failure_per_window(monkeypatch, t
         def start_browser(self, profile_id):
             return f"ws://secret-{profile_id}"
 
-    monkeypatch.setattr(app_module, "AdsPowerController", FakeController)
+    monkeypatch.setattr("gateway.browser_legacy.AdsPowerController", FakeController)
     monkeypatch.setattr("browser_cdp.wait_for_cdp", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(
         "window_tiler.tile_browser_windows",
@@ -1718,7 +1697,7 @@ def test_browser_execute_strategy_skips_only_profile_missing_from_layout(monkeyp
         def start_browser(self, profile_id):
             return f"ws://secret-{profile_id}"
 
-    monkeypatch.setattr(app_module, "AdsPowerController", FakeController)
+    monkeypatch.setattr("gateway.browser_legacy.AdsPowerController", FakeController)
     monkeypatch.setattr("browser_cdp.wait_for_cdp", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(
         "window_tiler.tile_browser_windows",
@@ -2025,16 +2004,13 @@ def test_gateway_classifies_real_runtime_failure_contract_for_all_stages(
             "error": "",
         }
     ]
-    monkeypatch.setattr(
-        app_module,
-        "ensure_browser_profile_sessions",
+    monkeypatch.setattr("gateway.browser_legacy.ensure_browser_profile_sessions",
         lambda *_args, **_kwargs: (
             sessions,
             window_tiler_result(["profile-1"]),
         ),
     )
-    monkeypatch.setattr(
-        app_module, "release_browser_session_results", lambda *_args, **_kwargs: None
+    monkeypatch.setattr("gateway.browser_legacy.release_browser_session_results", lambda *_args, **_kwargs: None
     )
 
     class Mouse:
@@ -2227,7 +2203,7 @@ def test_browser_execute_auto_strategy_reports_navigation_exception_as_prepare_s
 def test_browser_execute_auto_strategy_isolates_navigation_failure_per_profile_and_logs_stage(monkeypatch, tmp_path):
     app_module = importlib.import_module("gateway.app")
     monkeypatch.setenv("APP_CONFIG_PATH", str(tmp_path / "config.json"))
-    monkeypatch.setattr(app_module, "BROWSER_LOG_PATH", tmp_path / "browser.jsonl")
+    monkeypatch.setattr("gateway.browser_legacy.BROWSER_LOG_PATH", tmp_path / "browser.jsonl")
     save_settings(
         {
             "browser": {
@@ -2669,9 +2645,7 @@ def test_batch_task_rejects_invalid_strategy_before_side_effects(
     fetch_calls = []
     batch_calls = []
     thread_calls = []
-    monkeypatch.setattr(
-        app_module,
-        "fetch_adspower_windows",
+    monkeypatch.setattr("gateway.browser_legacy.fetch_adspower_windows",
         lambda: fetch_calls.append(True)
         or {"windows": [{"profile_id": "profile-1"}]},
     )
@@ -2767,7 +2741,7 @@ def test_batch_task_creates_twenty_five_batches_for_one_hundred_windows(monkeypa
         }
     )
     app_module.BROWSER_BATCH_TASKS.clear()
-    monkeypatch.setattr(app_module, "run_browser_batch_task", lambda *_args: None)
+    monkeypatch.setattr("gateway.browser_legacy.run_browser_batch_task", lambda *_args: None)
     windows = [{"profile_id": f"profile-{index}"} for index in range(100)]
 
     response = create_app().test_client().post(
@@ -2809,17 +2783,13 @@ def test_batch_runner_uses_leased_orchestrator_sessions_and_requests_safe_close(
         ensure_calls.append((profiles, lease_sessions))
         return [session], window_tiler_result(["profile-1"])
 
-    monkeypatch.setattr(app_module, "ensure_browser_profile_sessions", fake_ensure)
-    monkeypatch.setattr(
-        app_module,
-        "release_browser_session_results",
+    monkeypatch.setattr("gateway.browser_legacy.ensure_browser_profile_sessions", fake_ensure)
+    monkeypatch.setattr("gateway.browser_legacy.release_browser_session_results",
         lambda results, *, request_close=False: release_calls.append(
             (results, request_close)
         ),
     )
-    monkeypatch.setattr(
-        app_module,
-        "AdsPowerController",
+    monkeypatch.setattr("gateway.browser_legacy.AdsPowerController",
         lambda **_kwargs: (_ for _ in ()).throw(
             AssertionError("batch runner must not start or stop sessions directly")
         ),
@@ -2872,15 +2842,11 @@ def test_batch_runner_preserves_block_failure_action_fields(monkeypatch, tmp_pat
         "ws_url": "ws://profile-1",
         "error": "",
     }
-    monkeypatch.setattr(
-        app_module,
-        "ensure_browser_profile_sessions",
+    monkeypatch.setattr("gateway.browser_legacy.ensure_browser_profile_sessions",
         lambda *_args, **_kwargs: ([session], window_tiler_result(["profile-1"])),
     )
-    monkeypatch.setattr(app_module, "release_browser_session_results", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(
-        app_module,
-        "prepare_browser_page",
+    monkeypatch.setattr("gateway.browser_legacy.release_browser_session_results", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("gateway.browser_legacy.prepare_browser_page",
         lambda _ws_url, url: {"current_url": url, "closed_tabs": 0, "stages": []},
     )
 
@@ -3045,9 +3011,7 @@ def test_execute_strategy_denied_before_any_profile_operation(monkeypatch, tmp_p
     _save_gate_test_strategy(tmp_path, monkeypatch)
     gates = _SequenceGateService([_gate_decision(False)])
     profile_calls = []
-    monkeypatch.setattr(
-        app_module,
-        "ensure_browser_profile_sessions",
+    monkeypatch.setattr("gateway.browser_legacy.ensure_browser_profile_sessions",
         lambda *_args, **_kwargs: profile_calls.append(True),
     )
 
@@ -3088,17 +3052,13 @@ def test_execute_strategy_rechecks_gate_after_profile_reservation(
         "ws_url": "ws://profile-secret-1234",
         "error": "",
     }
-    monkeypatch.setattr(
-        app_module,
-        "ensure_browser_profile_sessions",
+    monkeypatch.setattr("gateway.browser_legacy.ensure_browser_profile_sessions",
         lambda *_args, **_kwargs: (
             [session],
             window_tiler_result(["profile-secret-1234"]),
         ),
     )
-    monkeypatch.setattr(
-        app_module,
-        "release_browser_session_results",
+    monkeypatch.setattr("gateway.browser_legacy.release_browser_session_results",
         lambda *_args, **_kwargs: None,
     )
     monkeypatch.setattr(
@@ -3138,17 +3098,13 @@ def test_execute_strategy_passes_gate_callback_and_sanitizes_mid_run_pause(
         "ws_url": "ws://profile-secret-1234",
         "error": "",
     }
-    monkeypatch.setattr(
-        app_module,
-        "ensure_browser_profile_sessions",
+    monkeypatch.setattr("gateway.browser_legacy.ensure_browser_profile_sessions",
         lambda *_args, **_kwargs: (
             [session],
             window_tiler_result(["profile-secret-1234"]),
         ),
     )
-    monkeypatch.setattr(
-        app_module,
-        "release_browser_session_results",
+    monkeypatch.setattr("gateway.browser_legacy.release_browser_session_results",
         lambda *_args, **_kwargs: None,
     )
 
@@ -3212,9 +3168,7 @@ def test_unstarted_batch_task_is_delayed_when_strategy_gate_is_closed(
         "results": [],
     }
     profile_calls = []
-    monkeypatch.setattr(
-        app_module,
-        "ensure_browser_profile_sessions",
+    monkeypatch.setattr("gateway.browser_legacy.ensure_browser_profile_sessions",
         lambda *_args, **_kwargs: profile_calls.append(True),
     )
     app = create_app(
@@ -3516,9 +3470,7 @@ def test_first_dependency_migration_never_holds_migration_lock_while_loading(
         finally:
             settings_lock.release()
 
-    monkeypatch.setattr(
-        app_module,
-        "load_persisted_strategy_state",
+    monkeypatch.setattr("gateway.browser_legacy.load_persisted_strategy_state",
         load_snapshot,
     )
     factory = app_module._dependency_aware_gate_factory(Service)
@@ -3582,14 +3534,10 @@ def test_batch_with_only_session_failures_remains_delayable_when_gate_closes(
         "attempts": 3,
         "error": "temporary",
     }
-    monkeypatch.setattr(
-        app_module,
-        "ensure_browser_profile_sessions",
+    monkeypatch.setattr("gateway.browser_legacy.ensure_browser_profile_sessions",
         lambda *_args, **_kwargs: ([failed_session], {"missing": []}),
     )
-    monkeypatch.setattr(
-        app_module,
-        "release_browser_session_results",
+    monkeypatch.setattr("gateway.browser_legacy.release_browser_session_results",
         lambda *_args, **_kwargs: None,
     )
 
@@ -3643,17 +3591,13 @@ def test_batch_becomes_terminal_after_real_action_execution_starts(
         "ws_url": "ws://profile-1",
         "error": "",
     }
-    monkeypatch.setattr(
-        app_module,
-        "ensure_browser_profile_sessions",
+    monkeypatch.setattr("gateway.browser_legacy.ensure_browser_profile_sessions",
         lambda *_args, **_kwargs: (
             [session],
             window_tiler_result(["profile-1"]),
         ),
     )
-    monkeypatch.setattr(
-        app_module,
-        "release_browser_session_results",
+    monkeypatch.setattr("gateway.browser_legacy.release_browser_session_results",
         lambda *_args, **_kwargs: None,
     )
 
@@ -3789,17 +3733,13 @@ def test_real_runtime_second_gate_pause_keeps_zero_action_batch_delayed(
         "ws_url": "ws://profile-1",
         "error": "",
     }
-    monkeypatch.setattr(
-        app_module,
-        "ensure_browser_profile_sessions",
+    monkeypatch.setattr("gateway.browser_legacy.ensure_browser_profile_sessions",
         lambda *_args, **_kwargs: (
             [session],
             window_tiler_result(["profile-1"]),
         ),
     )
-    monkeypatch.setattr(
-        app_module,
-        "release_browser_session_results",
+    monkeypatch.setattr("gateway.browser_legacy.release_browser_session_results",
         lambda *_args, **_kwargs: None,
     )
     mutations = []
@@ -3925,17 +3865,13 @@ def test_batch_becomes_terminal_after_an_action_completed(
         "ws_url": "ws://profile-1",
         "error": "",
     }
-    monkeypatch.setattr(
-        app_module,
-        "ensure_browser_profile_sessions",
+    monkeypatch.setattr("gateway.browser_legacy.ensure_browser_profile_sessions",
         lambda *_args, **_kwargs: (
             [session],
             window_tiler_result(["profile-1"]),
         ),
     )
-    monkeypatch.setattr(
-        app_module,
-        "release_browser_session_results",
+    monkeypatch.setattr("gateway.browser_legacy.release_browser_session_results",
         lambda *_args, **_kwargs: None,
     )
     monkeypatch.setattr(
@@ -3979,7 +3915,7 @@ def test_review_wave1_batch_stores_and_serves_only_projected_results(
     app_module = importlib.import_module("gateway.app")
     monkeypatch.setenv("APP_CONFIG_PATH", str(tmp_path / "config.json"))
     log_path = tmp_path / "browser.jsonl"
-    monkeypatch.setattr(app_module, "BROWSER_LOG_PATH", log_path)
+    monkeypatch.setattr("gateway.browser_legacy.BROWSER_LOG_PATH", log_path)
     save_settings(
         {
             "browser": {
@@ -4027,18 +3963,14 @@ def test_review_wave1_batch_stores_and_serves_only_projected_results(
         }
         for profile_id in ("profile-ok", "profile-failed")
     ]
-    monkeypatch.setattr(
-        app_module,
-        "ensure_browser_profile_sessions",
+    monkeypatch.setattr("gateway.browser_legacy.ensure_browser_profile_sessions",
         lambda *_args, **_kwargs: (
             sessions,
             window_tiler_result(["profile-ok", "profile-failed"]),
         ),
     )
     releases = []
-    monkeypatch.setattr(
-        app_module,
-        "release_browser_session_results",
+    monkeypatch.setattr("gateway.browser_legacy.release_browser_session_results",
         lambda results, *, request_close=False: releases.append(
             (results, request_close)
         ),
@@ -4194,7 +4126,7 @@ def test_open_tile_syncs_custom_url_and_closes_other_tabs(monkeypatch):
         def start_browser(self, profile_id):
             return f"ws://{profile_id}"
 
-    monkeypatch.setattr(app_module, "AdsPowerController", FakeController)
+    monkeypatch.setattr("gateway.browser_legacy.AdsPowerController", FakeController)
     monkeypatch.setattr(
         "window_tiler.tile_browser_windows",
         lambda hints: {
@@ -4292,7 +4224,7 @@ def test_open_tile_retries_prepare_until_third_success_without_restarting_sessio
         def start_browser(self, profile_id):
             return f"ws://{profile_id}"
 
-    monkeypatch.setattr(app_module, "AdsPowerController", FakeController)
+    monkeypatch.setattr("gateway.browser_legacy.AdsPowerController", FakeController)
     monkeypatch.setattr("window_tiler.tile_browser_windows", lambda _hints: {"layout": [], "missing": []})
     attempts = {"ws://profile-1": 0}
     waits = []
@@ -4342,9 +4274,7 @@ def test_open_tile_reports_prepare_failure_after_three_attempts(monkeypatch):
         "ws_url": "ws://profile-1",
         "error": "",
     }
-    monkeypatch.setattr(
-        app_module,
-        "ensure_browser_profile_sessions",
+    monkeypatch.setattr("gateway.browser_legacy.ensure_browser_profile_sessions",
         lambda _profiles, **_kwargs: ([session], window_tiler_result(["profile-1"])),
     )
     prepare_calls = []
@@ -4354,7 +4284,7 @@ def test_open_tile_reports_prepare_failure_after_three_attempts(monkeypatch):
         prepare_calls.append(target_url)
         raise app_module.BrowserStageError("navigate", target_url, "navigation failed")
 
-    monkeypatch.setattr(app_module, "prepare_browser_page", fail_prepare)
+    monkeypatch.setattr("gateway.browser_legacy.prepare_browser_page", fail_prepare)
     monkeypatch.setattr(app_module.time, "sleep", waits.append)
 
     response = create_app().test_client().post(
@@ -4403,7 +4333,7 @@ def test_open_tile_restarts_profile_when_cdp_is_not_ready(monkeypatch):
             raise TimeoutError("CDP 尚未就绪")
         return True
 
-    monkeypatch.setattr(app_module, "AdsPowerController", FakeController)
+    monkeypatch.setattr("gateway.browser_legacy.AdsPowerController", FakeController)
     monkeypatch.setattr("browser_cdp.wait_for_cdp", fake_wait)
     monkeypatch.setattr("window_tiler.tile_browser_windows", lambda hints: {"layout": [], "missing": []})
     monkeypatch.setattr(
@@ -4454,7 +4384,7 @@ def test_failed_session_restart_removes_stale_active_and_keeps_ready_profile(mon
         def stop_browser(self, _profile_id):
             return {"status": "stopped"}
 
-    monkeypatch.setattr(app_module, "AdsPowerController", FakeController)
+    monkeypatch.setattr("gateway.browser_legacy.AdsPowerController", FakeController)
     monkeypatch.setattr(app_module.time, "sleep", lambda _seconds: None)
     monkeypatch.setattr(
         "browser_cdp.wait_for_cdp",
@@ -4498,7 +4428,7 @@ def test_browser_sessions_api_lists_active_profiles_without_ws_endpoint():
 
 def test_browser_logs_api_reads_backend_operation_log(monkeypatch, tmp_path):
     app_module = importlib.import_module("gateway.app")
-    monkeypatch.setattr(app_module, "BROWSER_LOG_PATH", tmp_path / "browser.jsonl")
+    monkeypatch.setattr("gateway.browser_legacy.BROWSER_LOG_PATH", tmp_path / "browser.jsonl")
     app_module.record_browser_log(
         "execute_strategy",
         {
@@ -4526,7 +4456,7 @@ def test_browser_logs_api_reads_backend_operation_log(monkeypatch, tmp_path):
 def test_browser_logs_api_sanitizes_legacy_log_entries(monkeypatch, tmp_path):
     app_module = importlib.import_module("gateway.app")
     log_path = tmp_path / "browser.jsonl"
-    monkeypatch.setattr(app_module, "BROWSER_LOG_PATH", log_path)
+    monkeypatch.setattr("gateway.browser_legacy.BROWSER_LOG_PATH", log_path)
     log_path.write_text(
         json.dumps(
             {
@@ -4554,7 +4484,7 @@ def test_create_app_scrubs_sensitive_values_from_legacy_browser_log_file(
 ):
     app_module = importlib.import_module("gateway.app")
     log_path = tmp_path / "browser.jsonl"
-    monkeypatch.setattr(app_module, "BROWSER_LOG_PATH", log_path)
+    monkeypatch.setattr("gateway.browser_legacy.BROWSER_LOG_PATH", log_path)
     log_path.write_text(
         json.dumps(
             {
@@ -4614,9 +4544,7 @@ def test_block_strategy_needs_repair_is_rejected_before_session_side_effects(
         }
     )
     calls = []
-    monkeypatch.setattr(
-        app_module,
-        "ensure_browser_profile_sessions",
+    monkeypatch.setattr("gateway.browser_legacy.ensure_browser_profile_sessions",
         lambda *_args, **_kwargs: calls.append(True),
     )
 
@@ -4711,9 +4639,8 @@ def test_normal_and_batch_same_profile_do_not_overlap_and_failure_releases_reser
             [item["profile_id"] for item in profiles]
         )
 
-    monkeypatch.setattr(app_module, "ensure_browser_profile_sessions", fake_sessions)
-    monkeypatch.setattr(
-        app_module, "release_browser_session_results", lambda *_args, **_kwargs: None
+    monkeypatch.setattr("gateway.browser_legacy.ensure_browser_profile_sessions", fake_sessions)
+    monkeypatch.setattr("gateway.browser_legacy.release_browser_session_results", lambda *_args, **_kwargs: None
     )
     first_entered = threading.Event()
     finish_first = threading.Event()
@@ -4827,14 +4754,10 @@ def test_block_strategy_execution_isolates_runtime_failure_per_profile(
         }
         for profile_id in ("ok", "bad")
     ]
-    monkeypatch.setattr(
-        app_module,
-        "ensure_browser_profile_sessions",
+    monkeypatch.setattr("gateway.browser_legacy.ensure_browser_profile_sessions",
         lambda *_args, **_kwargs: (sessions, window_tiler_result(["ok", "bad"])),
     )
-    monkeypatch.setattr(
-        app_module,
-        "prepare_browser_page",
+    monkeypatch.setattr("gateway.browser_legacy.prepare_browser_page",
         lambda _ws_url, url: {"current_url": url, "closed_tabs": 1, "stages": []},
     )
 
@@ -4865,7 +4788,7 @@ def test_combined_strategy_reports_safe_verified_switches_and_scoped_locator(
     app_module = importlib.import_module("gateway.app")
     monkeypatch.setenv("APP_CONFIG_PATH", str(tmp_path / "config.json"))
     log_path = tmp_path / "browser.jsonl"
-    monkeypatch.setattr(app_module, "BROWSER_LOG_PATH", log_path)
+    monkeypatch.setattr("gateway.browser_legacy.BROWSER_LOG_PATH", log_path)
     save_settings(
         {
             "browser": {
@@ -4930,16 +4853,13 @@ def test_combined_strategy_reports_safe_verified_switches_and_scoped_locator(
         "ws_url": "ws://profile-1",
         "error": "",
     }
-    monkeypatch.setattr(
-        app_module,
-        "ensure_browser_profile_sessions",
+    monkeypatch.setattr("gateway.browser_legacy.ensure_browser_profile_sessions",
         lambda *_args, **_kwargs: (
             [session],
             window_tiler_result(["profile-1"]),
         ),
     )
-    monkeypatch.setattr(
-        app_module, "release_browser_session_results", lambda *_args, **_kwargs: None
+    monkeypatch.setattr("gateway.browser_legacy.release_browser_session_results", lambda *_args, **_kwargs: None
     )
     raw_numeric_id = "987654321012345678"
     raw_full_hash = "a" * 64
@@ -5081,7 +5001,7 @@ def test_verified_switch_failure_isolated_per_profile_with_partial_measurements(
     app_module = importlib.import_module("gateway.app")
     monkeypatch.setenv("APP_CONFIG_PATH", str(tmp_path / "config.json"))
     log_path = tmp_path / "browser.jsonl"
-    monkeypatch.setattr(app_module, "BROWSER_LOG_PATH", log_path)
+    monkeypatch.setattr("gateway.browser_legacy.BROWSER_LOG_PATH", log_path)
     save_settings(
         {
             "browser": {
@@ -5149,16 +5069,13 @@ def test_verified_switch_failure_isolated_per_profile_with_partial_measurements(
         }
         for profile_id in ("profile-1", "profile-2")
     ]
-    monkeypatch.setattr(
-        app_module,
-        "ensure_browser_profile_sessions",
+    monkeypatch.setattr("gateway.browser_legacy.ensure_browser_profile_sessions",
         lambda *_args, **_kwargs: (
             sessions,
             window_tiler_result(["profile-1", "profile-2"]),
         ),
     )
-    monkeypatch.setattr(
-        app_module, "release_browser_session_results", lambda *_args, **_kwargs: None
+    monkeypatch.setattr("gateway.browser_legacy.release_browser_session_results", lambda *_args, **_kwargs: None
     )
 
     def fake_run(ws_url, target_url, *_args):
@@ -5622,7 +5539,7 @@ def test_review_wave2_regex_valid_forbidden_ids_are_masked_in_response_and_log(
     app_module = importlib.import_module("gateway.app")
     monkeypatch.setenv("APP_CONFIG_PATH", str(tmp_path / "config.json"))
     log_path = tmp_path / "browser.jsonl"
-    monkeypatch.setattr(app_module, "BROWSER_LOG_PATH", log_path)
+    monkeypatch.setattr("gateway.browser_legacy.BROWSER_LOG_PATH", log_path)
     strategy_id = "outerHTML"
     action_id = "selectorSecret"
     alias = "contenteditableText"
@@ -5667,13 +5584,10 @@ def test_review_wave2_regex_valid_forbidden_ids_are_masked_in_response_and_log(
         "ws_url": "ws://profile-1",
         "error": "",
     }
-    monkeypatch.setattr(
-        app_module,
-        "ensure_browser_profile_sessions",
+    monkeypatch.setattr("gateway.browser_legacy.ensure_browser_profile_sessions",
         lambda *_args, **_kwargs: ([session], window_tiler_result(["profile-1"])),
     )
-    monkeypatch.setattr(
-        app_module, "release_browser_session_results", lambda *_args, **_kwargs: None
+    monkeypatch.setattr("gateway.browser_legacy.release_browser_session_results", lambda *_args, **_kwargs: None
     )
     monkeypatch.setattr(
         "browser_strategy_runtime.run_prepared_block_strategy_on_cdp",
@@ -5772,7 +5686,7 @@ def test_review_wave2_locator_failures_are_projected_and_release_route_reservati
     app_module = importlib.import_module("gateway.app")
     monkeypatch.setenv("APP_CONFIG_PATH", str(tmp_path / "config.json"))
     log_path = tmp_path / "browser.jsonl"
-    monkeypatch.setattr(app_module, "BROWSER_LOG_PATH", log_path)
+    monkeypatch.setattr("gateway.browser_legacy.BROWSER_LOG_PATH", log_path)
     definition = {
         "scope": "active_video",
         "locators": [
@@ -5826,16 +5740,13 @@ def test_review_wave2_locator_failures_are_projected_and_release_route_reservati
         "ws_url": "ws://profile-locator",
         "error": "",
     }
-    monkeypatch.setattr(
-        app_module,
-        "ensure_browser_profile_sessions",
+    monkeypatch.setattr("gateway.browser_legacy.ensure_browser_profile_sessions",
         lambda *_args, **_kwargs: (
             [session],
             window_tiler_result(["profile-locator"]),
         ),
     )
-    monkeypatch.setattr(
-        app_module, "release_browser_session_results", lambda *_args, **_kwargs: None
+    monkeypatch.setattr("gateway.browser_legacy.release_browser_session_results", lambda *_args, **_kwargs: None
     )
 
     def fail_locator(_ws_url, target_url, *_args):
@@ -5927,7 +5838,7 @@ def test_review_wave2_bound_malicious_switch_code_is_rejected(monkeypatch, tmp_p
     app_module = importlib.import_module("gateway.app")
     monkeypatch.setenv("APP_CONFIG_PATH", str(tmp_path / "config.json"))
     log_path = tmp_path / "browser.jsonl"
-    monkeypatch.setattr(app_module, "BROWSER_LOG_PATH", log_path)
+    monkeypatch.setattr("gateway.browser_legacy.BROWSER_LOG_PATH", log_path)
     save_settings(
         {
             "browser": {
@@ -5965,16 +5876,13 @@ def test_review_wave2_bound_malicious_switch_code_is_rejected(monkeypatch, tmp_p
         "ws_url": "ws://profile-forged",
         "error": "",
     }
-    monkeypatch.setattr(
-        app_module,
-        "ensure_browser_profile_sessions",
+    monkeypatch.setattr("gateway.browser_legacy.ensure_browser_profile_sessions",
         lambda *_args, **_kwargs: (
             [session],
             window_tiler_result(["profile-forged"]),
         ),
     )
-    monkeypatch.setattr(
-        app_module, "release_browser_session_results", lambda *_args, **_kwargs: None
+    monkeypatch.setattr("gateway.browser_legacy.release_browser_session_results", lambda *_args, **_kwargs: None
     )
 
     def fail_forged(_ws_url, target_url, *_args):
@@ -6090,24 +5998,18 @@ def test_block_strategy_execution_uses_one_combined_connection_per_profile(
         for profile_id in ("profile-1", "profile-2")
     ]
     release_calls = []
-    monkeypatch.setattr(
-        app_module,
-        "ensure_browser_profile_sessions",
+    monkeypatch.setattr("gateway.browser_legacy.ensure_browser_profile_sessions",
         lambda *_args, **_kwargs: (
             sessions,
             window_tiler_result(["profile-1", "profile-2"]),
         ),
     )
-    monkeypatch.setattr(
-        app_module,
-        "release_browser_session_results",
+    monkeypatch.setattr("gateway.browser_legacy.release_browser_session_results",
         lambda results, *, request_close=False: release_calls.append(
             (results, request_close)
         ),
     )
-    monkeypatch.setattr(
-        app_module,
-        "prepare_browser_page",
+    monkeypatch.setattr("gateway.browser_legacy.prepare_browser_page",
         lambda *_args: pytest.fail("separate page preparation is forbidden"),
     )
     calls = []
@@ -6196,20 +6098,15 @@ def test_block_strategy_execution_keeps_other_profile_success_on_disconnect(
         }
         for profile_id in ("profile-ok", "profile-bad")
     ]
-    monkeypatch.setattr(
-        app_module,
-        "ensure_browser_profile_sessions",
+    monkeypatch.setattr("gateway.browser_legacy.ensure_browser_profile_sessions",
         lambda *_args, **_kwargs: (
             sessions,
             window_tiler_result(["profile-ok", "profile-bad"]),
         ),
     )
-    monkeypatch.setattr(
-        app_module, "release_browser_session_results", lambda *_args, **_kwargs: None
+    monkeypatch.setattr("gateway.browser_legacy.release_browser_session_results", lambda *_args, **_kwargs: None
     )
-    monkeypatch.setattr(
-        app_module,
-        "prepare_browser_page",
+    monkeypatch.setattr("gateway.browser_legacy.prepare_browser_page",
         lambda *_args: pytest.fail("separate page preparation is forbidden"),
     )
 
@@ -6256,7 +6153,7 @@ def test_block_strategy_lifecycle_isolated_and_logged_without_secrets(
     app_module = importlib.import_module("gateway.app")
     monkeypatch.setenv("APP_CONFIG_PATH", str(tmp_path / "config.json"))
     log_path = tmp_path / "browser.jsonl"
-    monkeypatch.setattr(app_module, "BROWSER_LOG_PATH", log_path)
+    monkeypatch.setattr("gateway.browser_legacy.BROWSER_LOG_PATH", log_path)
     save_settings(
         {
             "browser": {
@@ -6300,16 +6197,13 @@ def test_block_strategy_lifecycle_isolated_and_logged_without_secrets(
         }
         for index, profile_id in enumerate(("profile-1", "profile-2"), start=1)
     ]
-    monkeypatch.setattr(
-        app_module,
-        "ensure_browser_profile_sessions",
+    monkeypatch.setattr("gateway.browser_legacy.ensure_browser_profile_sessions",
         lambda *_args, **_kwargs: (
             sessions,
             window_tiler_result(["profile-1", "profile-2"]),
         ),
     )
-    monkeypatch.setattr(
-        app_module, "release_browser_session_results", lambda *_args, **_kwargs: None
+    monkeypatch.setattr("gateway.browser_legacy.release_browser_session_results", lambda *_args, **_kwargs: None
     )
     sensitive_values = (
         "plain-token",
@@ -6382,8 +6276,7 @@ def test_block_strategy_lifecycle_isolated_and_logged_without_secrets(
             execute_log_payloads.append(payload)
         original_record_browser_log(operation, payload)
 
-    monkeypatch.setattr(
-        app_module, "record_browser_log", assert_public_then_record
+    monkeypatch.setattr("gateway.browser_legacy.record_browser_log", assert_public_then_record
     )
 
     response = create_app().test_client().post(
@@ -6459,24 +6352,18 @@ def test_batch_runner_uses_one_combined_connection_per_profile(
         for profile_id in ("profile-1", "profile-2")
     ]
     release_calls = []
-    monkeypatch.setattr(
-        app_module,
-        "ensure_browser_profile_sessions",
+    monkeypatch.setattr("gateway.browser_legacy.ensure_browser_profile_sessions",
         lambda *_args, **_kwargs: (
             sessions,
             window_tiler_result(["profile-1", "profile-2"]),
         ),
     )
-    monkeypatch.setattr(
-        app_module,
-        "release_browser_session_results",
+    monkeypatch.setattr("gateway.browser_legacy.release_browser_session_results",
         lambda results, *, request_close=False: release_calls.append(
             (results, request_close)
         ),
     )
-    monkeypatch.setattr(
-        app_module,
-        "prepare_browser_page",
+    monkeypatch.setattr("gateway.browser_legacy.prepare_browser_page",
         lambda *_args: pytest.fail("separate page preparation is forbidden"),
     )
     calls = []
@@ -6534,7 +6421,7 @@ def test_batch_lifecycle_isolated_and_logged_from_public_payload(
     app_module = importlib.import_module("gateway.app")
     monkeypatch.setenv("APP_CONFIG_PATH", str(tmp_path / "config.json"))
     log_path = tmp_path / "browser.jsonl"
-    monkeypatch.setattr(app_module, "BROWSER_LOG_PATH", log_path)
+    monkeypatch.setattr("gateway.browser_legacy.BROWSER_LOG_PATH", log_path)
     save_settings(
         {
             "browser": {
@@ -6562,16 +6449,13 @@ def test_batch_lifecycle_isolated_and_logged_from_public_payload(
         }
         for index, profile_id in enumerate(("profile-1", "profile-2"), start=1)
     ]
-    monkeypatch.setattr(
-        app_module,
-        "ensure_browser_profile_sessions",
+    monkeypatch.setattr("gateway.browser_legacy.ensure_browser_profile_sessions",
         lambda *_args, **_kwargs: (
             sessions,
             window_tiler_result(["profile-1", "profile-2"]),
         ),
     )
-    monkeypatch.setattr(
-        app_module, "release_browser_session_results", lambda *_args, **_kwargs: None
+    monkeypatch.setattr("gateway.browser_legacy.release_browser_session_results", lambda *_args, **_kwargs: None
     )
     sensitive_values = (
         "batch-token",
@@ -6628,8 +6512,7 @@ def test_batch_lifecycle_isolated_and_logged_from_public_payload(
             batch_log_payloads.append(payload)
         original_record_browser_log(operation, payload)
 
-    monkeypatch.setattr(
-        app_module, "record_browser_log", assert_public_then_record
+    monkeypatch.setattr("gateway.browser_legacy.record_browser_log", assert_public_then_record
     )
 
     app_module.run_browser_batch_task(
@@ -6675,9 +6558,7 @@ def test_batch_lifecycle_isolated_and_logged_from_public_payload(
 def test_block_strategy_text_resolver_handles_fixed_and_brand_copy(monkeypatch):
     app_module = importlib.import_module("gateway.app")
     calls = []
-    monkeypatch.setattr(
-        app_module,
-        "collect_strategy_comments",
+    monkeypatch.setattr("gateway.browser_legacy.collect_strategy_comments",
         lambda _data_dir, brand_id="": calls.append(brand_id)
         or [{"body": "Brand copy", "tags": ["#one"]}],
     )
@@ -6707,9 +6588,7 @@ def test_block_strategy_text_resolver_handles_fixed_and_brand_copy(monkeypatch):
 
 def test_v2_content_library_provider_returns_metadata_only(monkeypatch):
     app_module = importlib.import_module("gateway.app")
-    monkeypatch.setattr(
-        app_module,
-        "list_brands",
+    monkeypatch.setattr("gateway.browser_legacy.list_brands",
         lambda _data_dir: [
             {"id": "ofs", "name": "OFS", "copy_count": 40, "updated_at": "secret"}
         ],
@@ -6725,9 +6604,7 @@ def test_v2_content_library_provider_returns_metadata_only(monkeypatch):
 def test_v2_text_resolver_picks_from_requested_library(monkeypatch):
     app_module = importlib.import_module("gateway.app")
     calls = []
-    monkeypatch.setattr(
-        app_module,
-        "list_copy_items",
+    monkeypatch.setattr("gateway.browser_legacy.list_copy_items",
         lambda _data_dir, brand_id: calls.append(brand_id)
         or [{"body": "first"}, {"body": "second"}],
     )
@@ -6744,7 +6621,7 @@ def test_v2_text_resolver_rejects_missing_or_empty_library(monkeypatch):
     app_module = importlib.import_module("gateway.app")
     from execution_v2.actions import ActionExecutionError
 
-    monkeypatch.setattr(app_module, "list_copy_items", lambda _data_dir, _brand_id: [])
+    monkeypatch.setattr("gateway.browser_legacy.list_copy_items", lambda _data_dir, _brand_id: [])
     resolver = app_module.build_execution_v2_text_resolver("unused")
 
     for action in ({"content_library_id": ""}, {"content_library_id": "empty"}):

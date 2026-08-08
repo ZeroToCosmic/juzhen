@@ -1,4 +1,4 @@
-import asyncio
+﻿import asyncio
 import importlib
 import json
 import threading
@@ -27,7 +27,7 @@ def patch_session_dependencies(monkeypatch, app_module, fake_ensure):
         def __init__(self, **_kwargs):
             pass
 
-    monkeypatch.setattr(app_module, "AdsPowerController", FakeController)
+    monkeypatch.setattr("gateway.browser_legacy.AdsPowerController", FakeController)
     monkeypatch.setattr(
         "gateway.browser_orchestrator.ensure_profile_session", fake_ensure
     )
@@ -114,8 +114,7 @@ def test_failed_final_stop_keeps_session_tracked(monkeypatch):
     assert app_module.acquire_browser_session_use("profile-1", "ws://still-running")
     logged = []
     monkeypatch.setattr(
-        app_module,
-        "record_browser_log",
+        "gateway.browser_legacy.record_browser_log",
         lambda operation, payload: logged.append((operation, payload)),
     )
 
@@ -233,7 +232,7 @@ def test_in_use_unhealthy_session_is_not_stopped_or_replaced(monkeypatch):
         def stop_browser(self, _profile_id):
             calls["stop"] += 1
 
-    monkeypatch.setattr(app_module, "AdsPowerController", FakeController)
+    monkeypatch.setattr("gateway.browser_legacy.AdsPowerController", FakeController)
     monkeypatch.setattr("browser_cdp.wait_for_cdp", lambda *_args, **_kwargs: False)
     monkeypatch.setattr(app_module.time, "sleep", lambda *_args: None)
 
@@ -393,7 +392,7 @@ def test_element_test_route_inspects_profiles_read_only_and_isolates_failures(
     app_module.ACTIVE_BROWSER_SESSIONS.update(
         {"profile-1": "ws://profile-1", "profile-2": "ws://profile-2"}
     )
-    monkeypatch.setattr(app_module, "BROWSER_LOG_PATH", tmp_path / "browser.jsonl")
+    monkeypatch.setattr("gateway.browser_legacy.BROWSER_LOG_PATH", tmp_path / "browser.jsonl")
     elements = {
         "评论入口": {
             "scope": "page",
@@ -477,8 +476,8 @@ def test_element_test_route_inspects_profiles_read_only_and_isolates_failures(
             },
         }
 
-    monkeypatch.setattr(app_module, "get_async_playwright", lambda: FakePlaywright, raising=False)
-    monkeypatch.setattr(app_module, "inspect_element", fake_inspect, raising=False)
+    monkeypatch.setattr("gateway.browser_legacy.get_async_playwright", lambda: FakePlaywright, raising=False)
+    monkeypatch.setattr("gateway.browser_legacy.inspect_element", fake_inspect, raising=False)
 
     response = create_app().test_client().post(
         "/api/browser/elements/test",
@@ -535,7 +534,7 @@ def test_element_test_route_reports_each_requested_alias_when_inspection_fails(m
     app_module.ACTIVE_BROWSER_SESSIONS.clear()
     app_module.BROWSER_SESSION_LEASES.clear()
     app_module.ACTIVE_BROWSER_SESSIONS["profile-1"] = "ws://profile-1"
-    monkeypatch.setattr(app_module, "inspect_browser_elements_on_cdp", lambda *_args: [])
+    monkeypatch.setattr("gateway.browser_legacy.inspect_browser_elements_on_cdp", lambda *_args: [])
     elements = {
         "评论入口": {
             "scope": "page",
@@ -580,7 +579,7 @@ def test_element_test_route_returns_safe_errors_for_each_alias_after_profile_fai
     app_module.ACTIVE_BROWSER_SESSIONS.update(
         {"profile-ok": "ws://profile-ok", "profile-fail": "ws://profile-fail"}
     )
-    monkeypatch.setattr(app_module, "BROWSER_LOG_PATH", tmp_path / "browser.jsonl")
+    monkeypatch.setattr("gateway.browser_legacy.BROWSER_LOG_PATH", tmp_path / "browser.jsonl")
     elements = {
         "评论入口": {
             "scope": "page",
@@ -657,8 +656,8 @@ def test_element_test_route_returns_safe_errors_for_each_alias_after_profile_fai
             "diagnostics": {"candidates": []},
         }
 
-    monkeypatch.setattr(app_module, "get_async_playwright", lambda: FakePlaywright)
-    monkeypatch.setattr(app_module, "inspect_element", fake_inspect)
+    monkeypatch.setattr("gateway.browser_legacy.get_async_playwright", lambda: FakePlaywright)
+    monkeypatch.setattr("gateway.browser_legacy.inspect_element", fake_inspect)
 
     response = create_app().test_client().post(
         "/api/browser/elements/test",
@@ -718,7 +717,9 @@ def test_read_elements_route_migrates_legacy_xpath_before_inspection(monkeypatch
         ]
 
     monkeypatch.setattr(
-        app_module, "inspect_browser_elements_on_cdp", fake_inspect_on_cdp, raising=False
+        "gateway.browser_legacy.inspect_browser_elements_on_cdp",
+        fake_inspect_on_cdp,
+        raising=False,
     )
 
     response = create_app().test_client().post(

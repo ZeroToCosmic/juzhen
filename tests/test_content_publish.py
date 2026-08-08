@@ -1,4 +1,4 @@
-from contextlib import closing
+﻿from contextlib import closing
 from io import BytesIO
 import sqlite3
 
@@ -82,7 +82,7 @@ def api_xlsx_bytes(rows):
 def test_sync_r2_videos_saves_library_without_returning_video_links(monkeypatch, tmp_path):
     client, _data_dir, _db_path = make_client(tmp_path, monkeypatch)
     monkeypatch.setattr(
-        "gateway.app.list_r2_video_objects",
+        "gateway.routes_publish.list_r2_video_objects",
         lambda settings: [
             {"key": "videos/one.mp4", "url": "https://cdn.example.com/one.mp4"},
             {"key": "videos/two.mov", "url": "https://cdn.example.com/two.mov"},
@@ -361,7 +361,7 @@ def test_manual_publish_test_creates_buffer_update_and_result(
         captured["payload"] = payload
         return {"success": True, "update_id": "buffer-update-1"}
 
-    monkeypatch.setattr("gateway.app.publish_to_buffer", fake_publish)
+    monkeypatch.setattr("gateway.publish_queue.publish_to_buffer", fake_publish)
 
     response = client.post(
         "/api/publish/queue/manual-test",
@@ -416,7 +416,7 @@ def test_manual_publish_failure_keeps_video_available(monkeypatch, tmp_path):
     def fail_publish(proxy_url, access_token, payload):
         raise requests.exceptions.ReadTimeout("proxy timed out")
 
-    monkeypatch.setattr("gateway.app.publish_to_buffer", fail_publish)
+    monkeypatch.setattr("gateway.publish_queue.publish_to_buffer", fail_publish)
 
     response = client.post(
         "/api/publish/queue/manual-test",
@@ -456,7 +456,7 @@ def test_batch_publish_uses_each_video_once(monkeypatch, tmp_path):
         json={"brand_id": "brand-one", "body": "正文", "tags": "#tag"},
     )
     monkeypatch.setattr(
-        "gateway.app.publish_to_buffer",
+        "gateway.publish_queue.publish_to_buffer",
         lambda proxy_url, access_token, payload: {"success": True},
     )
 
@@ -502,7 +502,7 @@ def test_batch_publish_only_enqueues_pending_tasks(monkeypatch, tmp_path):
         calls["count"] += 1
         return {"success": True}
 
-    monkeypatch.setattr("gateway.app.publish_to_buffer", fake_publish)
+    monkeypatch.setattr("gateway.publish_queue.publish_to_buffer", fake_publish)
 
     response = client.post(
         "/api/publish/queue/batch",
@@ -559,7 +559,7 @@ def test_publish_queue_process_one_executes_single_pending_task(monkeypatch, tmp
         captured["payload"] = payload
         return {"success": True, "update_id": "buffer-update-1"}
 
-    monkeypatch.setattr("gateway.app.publish_to_buffer", fake_publish)
+    monkeypatch.setattr("gateway.publish_queue.publish_to_buffer", fake_publish)
 
     response = client.post("/api/publish/queue/process-one")
 
@@ -600,7 +600,7 @@ def test_batch_publish_selected_accounts_creates_only_available_video_count(monk
         json={"brand_id": "brand-one", "body": "姝ｆ枃", "tags": "#tag"},
     )
     monkeypatch.setattr(
-        "gateway.app.publish_to_buffer",
+        "gateway.publish_queue.publish_to_buffer",
         lambda proxy_url, access_token, payload: {"success": True},
     )
 
@@ -1010,7 +1010,7 @@ def test_publish_sample_next_runs_sampler_and_updates_due_task(monkeypatch, tmp_
         calls.append((command, kwargs))
         return FakeCompleted()
 
-    monkeypatch.setattr("gateway.app.subprocess.run", fake_run)
+    monkeypatch.setattr("gateway.publish_queue.subprocess.run", fake_run)
 
     response = client.post("/api/publish/sample-next")
 
@@ -1054,7 +1054,7 @@ def test_publish_sample_next_can_override_min_age_for_automatic_runner(monkeypat
         stdout = '{"views_24h": 7, "likes_24h": 2, "comments": 1}'
         stderr = ""
 
-    monkeypatch.setattr("gateway.app.subprocess.run", lambda *args, **kwargs: FakeCompleted())
+    monkeypatch.setattr("gateway.publish_queue.subprocess.run", lambda *args, **kwargs: FakeCompleted())
 
     response = client.post("/api/publish/sample-next?min_age_hours=0")
 
@@ -1075,8 +1075,8 @@ def test_publish_auto_sample_tick_runs_backfill_and_sampling_with_config(monkeyp
         calls.append(("sample", data_dir, min_age_hours))
         return {"processed": False, "task": None}
 
-    monkeypatch.setattr("gateway.app.execute_next_tiktok_link_backfill", fake_backfill)
-    monkeypatch.setattr("gateway.app.execute_next_publish_sample", fake_sample)
+    monkeypatch.setattr("gateway.publish_queue.execute_next_tiktok_link_backfill", fake_backfill)
+    monkeypatch.setattr("gateway.publish_queue.execute_next_publish_sample", fake_sample)
 
     response = client.post("/api/publish/auto-sample-tick")
 
@@ -1108,7 +1108,7 @@ def test_publish_sample_next_records_sampler_failure(monkeypatch, tmp_path):
         stdout = ""
         stderr = "TikTok verification or captcha is visible"
 
-    monkeypatch.setattr("gateway.app.subprocess.run", lambda *args, **kwargs: FakeCompleted())
+    monkeypatch.setattr("gateway.publish_queue.subprocess.run", lambda *args, **kwargs: FakeCompleted())
 
     response = client.post("/api/publish/sample-next")
 
@@ -1149,7 +1149,7 @@ def test_publish_backfill_link_next_fetches_buffer_post_and_writes_tiktok_url(mo
             }
         }
 
-    monkeypatch.setattr("gateway.app.fetch_buffer_post", fake_fetch)
+    monkeypatch.setattr("gateway.publish_queue.fetch_buffer_post", fake_fetch)
 
     response = client.post("/api/publish/backfill-link-next")
 
@@ -1178,7 +1178,7 @@ def test_publish_backfill_link_next_records_missing_buffer_url(monkeypatch, tmp_
             ]
         },
     )
-    monkeypatch.setattr("gateway.app.fetch_buffer_post", lambda *args, **kwargs: {"data": {"post": {"id": "buffer-update-1"}}})
+    monkeypatch.setattr("gateway.publish_queue.fetch_buffer_post", lambda *args, **kwargs: {"data": {"post": {"id": "buffer-update-1"}}})
 
     response = client.post("/api/publish/backfill-link-next")
 

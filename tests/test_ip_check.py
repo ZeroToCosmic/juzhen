@@ -1,4 +1,4 @@
-import requests
+﻿import requests
 import sqlite3
 
 from gateway.app import create_app
@@ -25,7 +25,7 @@ def test_check_ip_returns_ipinfo_through_account_proxy(monkeypatch):
         captured["timeout"] = timeout
         return FakeResponse()
 
-    monkeypatch.setattr("gateway.app.generate_proxy_url", fake_generate_proxy_url)
+    monkeypatch.setattr("gateway.publish_queue.generate_proxy_url", fake_generate_proxy_url)
     monkeypatch.setattr("gateway.ip_checker.requests.get", fake_get)
 
     client = create_app().test_client()
@@ -70,7 +70,7 @@ def test_check_ip_uses_configured_service_url_and_timeout(monkeypatch, tmp_path)
         captured["timeout"] = timeout
         return FakeResponse()
 
-    monkeypatch.setattr("gateway.app.generate_proxy_url", fake_generate_proxy_url)
+    monkeypatch.setattr("gateway.publish_queue.generate_proxy_url", fake_generate_proxy_url)
     monkeypatch.setattr("gateway.ip_checker.requests.get", fake_get)
 
     client = create_app().test_client()
@@ -96,7 +96,7 @@ def test_check_ip_returns_bad_gateway_when_proxy_request_fails(monkeypatch):
     def fake_get(url, proxies, timeout):
         raise requests.RequestException("proxy failed")
 
-    monkeypatch.setattr("gateway.app.generate_proxy_url", fake_generate_proxy_url)
+    monkeypatch.setattr("gateway.publish_queue.generate_proxy_url", fake_generate_proxy_url)
     monkeypatch.setattr("gateway.ip_checker.requests.get", fake_get)
 
     client = create_app().test_client()
@@ -137,7 +137,7 @@ def test_check_ip_prefers_assigned_account_proxy(monkeypatch, tmp_path):
         captured["proxy_url"] = proxy_url
         return {"ip": "203.0.113.8"}
 
-    monkeypatch.setattr("gateway.app.fetch_ip_info", fake_fetch_ip_info)
+    monkeypatch.setattr("gateway.routes_ip.fetch_ip_info", fake_fetch_ip_info)
 
     app = create_app()
     app.config["ACCOUNTS_DB_PATH"] = db_path

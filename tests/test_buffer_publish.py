@@ -1,4 +1,4 @@
-from contextlib import closing
+﻿from contextlib import closing
 
 import requests
 
@@ -50,7 +50,7 @@ def test_publish_buffer_forwards_payload_through_account_proxy(monkeypatch, tmp_
         captured["timeout"] = timeout
         return successful_graphql_response()
 
-    monkeypatch.setattr("gateway.app.generate_proxy_url", fake_generate_proxy_url)
+    monkeypatch.setattr("gateway.publish_queue.generate_proxy_url", fake_generate_proxy_url)
     monkeypatch.setattr("gateway.buffer_client.requests.post", fake_post)
 
     client = create_app().test_client()
@@ -110,7 +110,7 @@ def test_publish_buffer_uses_configured_service_url_and_timeout(monkeypatch, tmp
         captured["input"] = json["variables"]["input"]
         return successful_graphql_response()
 
-    monkeypatch.setattr("gateway.app.generate_proxy_url", fake_generate_proxy_url)
+    monkeypatch.setattr("gateway.publish_queue.generate_proxy_url", fake_generate_proxy_url)
     monkeypatch.setattr("gateway.buffer_client.requests.post", fake_post)
 
     client = create_app().test_client()
@@ -197,7 +197,7 @@ def test_publish_buffer_uses_stored_token_and_profile_ids(monkeypatch, tmp_path)
         channel_id = json["variables"]["input"]["channelId"]
         return successful_graphql_response(f"post-{channel_id}")
 
-    monkeypatch.setattr("gateway.app.generate_proxy_url", fake_generate_proxy_url)
+    monkeypatch.setattr("gateway.publish_queue.generate_proxy_url", fake_generate_proxy_url)
     monkeypatch.setattr("gateway.buffer_client.requests.post", fake_post)
 
     app = create_app()
@@ -230,7 +230,7 @@ def test_publish_buffer_returns_typed_graphql_error(monkeypatch):
             {"data": {"createPost": {"message": "TikTok channel is disconnected"}}}
         )
 
-    monkeypatch.setattr("gateway.app.generate_proxy_url", fake_generate_proxy_url)
+    monkeypatch.setattr("gateway.publish_queue.generate_proxy_url", fake_generate_proxy_url)
     monkeypatch.setattr("gateway.buffer_client.requests.post", fake_post)
 
     response = create_app().test_client().post(
@@ -253,7 +253,7 @@ def test_publish_buffer_returns_request_exception(monkeypatch):
     def fake_post(url, json, headers, proxies, timeout):
         raise requests.exceptions.ReadTimeout("buffer request timed out")
 
-    monkeypatch.setattr("gateway.app.generate_proxy_url", fake_generate_proxy_url)
+    monkeypatch.setattr("gateway.publish_queue.generate_proxy_url", fake_generate_proxy_url)
     monkeypatch.setattr("gateway.buffer_client.requests.post", fake_post)
 
     client = create_app().test_client()
