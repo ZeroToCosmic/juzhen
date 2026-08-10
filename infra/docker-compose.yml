@@ -1,0 +1,53 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: bcs-postgres
+    environment:
+      POSTGRES_USER: bcs
+      POSTGRES_PASSWORD: bcs-local-only
+      POSTGRES_DB: bcs
+    ports:
+      - "5432:5432"
+    volumes:
+      - bcs_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bcs"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: bcs-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - bcs_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  nats:
+    image: nats:2.10
+    container_name: bcs-nats
+    command:
+      - "--jetstream"
+      - "--store_dir=/data"
+      - "--http_port=8222"
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+    volumes:
+      - bcs_nats_data:/data
+    healthcheck:
+      test: ["CMD", "nats-server", "--version"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  bcs_pg_data:
+  bcs_redis_data:
+  bcs_nats_data:
