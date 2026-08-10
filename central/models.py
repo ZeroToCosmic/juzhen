@@ -117,3 +117,85 @@ class DeployTask(Base):
     lease_generation: Mapped[int] = mapped_column(Integer, default=0)
     revision: Mapped[int] = mapped_column(Integer, default=1)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class Task(Base):
+    __tablename__ = "tasks"
+
+    task_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), ForeignKey("tenants.id"), nullable=False)
+    task_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    params: Mapped[dict] = mapped_column(JSON, nullable=False)
+    strategy_version: Mapped[str] = mapped_column(String(32), default="")
+    config_snapshot: Mapped[dict] = mapped_column(JSON, nullable=False)
+    schedule: Mapped[dict] = mapped_column(JSON, default=dict)
+    deadline: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    priority: Mapped[str] = mapped_column(String(8), default="medium")
+    status: Mapped[str] = mapped_column(String(32), default="PENDING")
+    created_by: Mapped[str] = mapped_column(String(128), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class SubTask(Base):
+    __tablename__ = "subtasks"
+    __table_args__ = (UniqueConstraint("task_id", "account_id", name="uq_subtask_task_account"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    subtask_id: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    tenant_id: Mapped[str] = mapped_column(String(64), ForeignKey("tenants.id"), nullable=False)
+    task_id: Mapped[str] = mapped_column(String(64), ForeignKey("tasks.task_id"), nullable=False)
+    account_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    profile_id: Mapped[str] = mapped_column(String(128), default="")
+    config_snapshot: Mapped[dict] = mapped_column(JSON, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="QUEUED")
+    assigned_device_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    lease_owner: Mapped[str] = mapped_column(String(128), default="")
+    lease_generation: Mapped[int] = mapped_column(Integer, default=0)
+    lease_timeout_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_progress_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revision: Mapped[int] = mapped_column(Integer, default=1)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    error_category: Mapped[str] = mapped_column(String(32), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class DependencyEdge(Base):
+    __tablename__ = "dependency_edges"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    parent_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    child_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    condition: Mapped[str] = mapped_column(String(16), default="AND")
+    required_handle_schema: Mapped[dict] = mapped_column(JSON, default=dict)
+    seq: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class Handle(Base):
+    __tablename__ = "handles"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    subtask_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    parent_subtask_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    content: Mapped[dict] = mapped_column(JSON, nullable=False)
+    text_hash: Mapped[str] = mapped_column(String(64), default="")
+    verification_status: Mapped[str] = mapped_column(String(32), default="UNVERIFIED")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class TaskResult(Base):
+    __tablename__ = "task_results"
+    __table_args__ = (UniqueConstraint("subtask_id", "generation", name="uq_result_subtask_generation"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    subtask_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    generation: Mapped[int] = mapped_column(Integer, default=0)
+    device_id: Mapped[str] = mapped_column(String(128), default="")
+    status: Mapped[str] = mapped_column(String(32), default="")
+    error_category: Mapped[str] = mapped_column(String(32), default="")
+    result_data: Mapped[dict] = mapped_column(JSON, default=dict)
+    duration_ms: Mapped[int] = mapped_column(Integer, default=0)
+    error_code: Mapped[str] = mapped_column(String(64), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

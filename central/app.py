@@ -19,11 +19,15 @@ from central.accounts import router as accounts_router
 from central.db import get_session, init_db
 from central.devices import router as devices_router
 from central.models import Device, DeviceSession
+from central.scheduler import router as scheduler_router
+from central.tasks import router as tasks_router
 
 app = FastAPI(title="Business Control Central", version="0.1.0")
 
 app.include_router(devices_router)
 app.include_router(accounts_router)
+app.include_router(tasks_router)
+app.include_router(scheduler_router)
 
 
 @app.on_event("startup")
