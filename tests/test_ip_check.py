@@ -1,4 +1,4 @@
-﻿import requests
+import requests
 import sqlite3
 
 from gateway.app import create_app

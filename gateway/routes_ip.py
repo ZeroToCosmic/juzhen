@@ -1,4 +1,4 @@
-﻿"""IP check and Buffer publish routes (migrated from gateway/app.py)."""
+"""IP check and Buffer publish routes (migrated from gateway/app.py)."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-﻿from contextlib import closing
+from contextlib import closing
 from io import BytesIO
 import sqlite3
 
