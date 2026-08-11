@@ -36,7 +36,7 @@
 ## 文档地图
 
 - 系统：[上下文](system/context.md)、[运行拓扑](system/runtime-topology.md)、[模块地图](system/module-map.md)、[数据流](system/data-flow.md)、[技术栈](system/technology-stack.md)。
-- 模块：[Launcher](modules/launcher.md)、[Gateway](modules/gateway.md)、[认证](modules/authentication.md)、[设置](modules/settings.md)、[账号与代理](modules/accounts-and-proxies.md)、[内容与发布](modules/content-and-publishing.md)、[Legacy Browser](modules/legacy-browser-strategy.md)、[Execution V2](modules/execution-v2.md)、[Selector Probe](modules/selector-probe.md)、[TikTok Stats](modules/tiktok-stats.md)、[Comment Campaign](modules/comment-campaign.md)。
+- 模块：[Launcher](modules/launcher.md)、[Gateway](modules/gateway.md)、[认证](modules/authentication.md)、[设置](modules/settings.md)、[账号与代理](modules/accounts-and-proxies.md)、[内容与发布](modules/content-and-publishing.md)、[Legacy Browser](modules/legacy-browser-strategy.md)、[Execution V2](modules/execution-v2.md)、[Selector Probe](modules/selector-probe.md)、[TikTok Stats](modules/tiktok-stats.md)、[Comment Campaign](modules/comment-campaign.md)、[业务控制系统 BCS](modules/business-control-system.md)。
 - 决策：[ADR索引](adr/README.md)。
 - HTTP：[API入口](api/README.md)、[OpenAPI](api/openapi.yaml)、[路由清单](api/route-inventory.md)、[错误码](api/error-codes.md)。
 - 消息：[Topic树](messaging/topic-tree.md)、[Redis Keyspace](messaging/redis-keyspace.md)、[消息Schema](messaging/README.md)。
