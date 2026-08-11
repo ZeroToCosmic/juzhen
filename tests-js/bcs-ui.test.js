@@ -127,3 +127,77 @@ test("bcs.js surfaces central errors in textContent", async () => {
   await new Promise((resolve) => setTimeout(resolve, 20));
   assert.ok(node("#dashboard-error").textContent.includes("stale generation"));
 });
+
+function stubWebSocketClass(handlers) {
+  const sockets = [];
+  global.WebSocket = function (url) {
+    this.url = url;
+    this.onmessage = null;
+    this.onclose = null;
+    this.onerror = null;
+    sockets.push(this);
+    if (handlers.onConstruct) {
+      handlers.onConstruct(this);
+    }
+  };
+  global.WebSocket.prototype.close = function () {
+    if (this.onclose) {
+      this.onclose();
+    }
+  };
+  return sockets;
+}
+
+test("bcs.js connects to ws with tenant and last_seq", async () => {
+  const { document } = createDom();
+  global.document = document;
+  global.window = { BCS_TENANT_ID: "tenant-ws", BCS_CENTRAL_URL: "http://127.0.0.1:8000" };
+  stubFetch(() => ({ json: { devices: [] } }));
+  const sockets = stubWebSocketClass({});
+  const run = new Function("window", bcsSource);
+  run(global.window);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.ok(sockets.length > 0);
+  assert.ok(sockets[0].url.includes("/ws/events"));
+  assert.ok(sockets[0].url.includes("tenant_id=tenant-ws"));
+});
+
+test("bcs.js refreshes dashboard on subtask.result event", async () => {
+  const { document } = createDom();
+  global.document = document;
+  global.window = {};
+  let summaryCalls = 0;
+  stubFetch((url) => {
+    if (url.endsWith("/api/central/dashboard/summary")) {
+      summaryCalls += 1;
+    }
+    return { json: { tasks_today: 1, success_rate: null, running_windows: 0, queued: 0, dlq: 0, online_devices: 0, total_devices: 0 } };
+  });
+  const sockets = stubWebSocketClass({});
+  const run = new Function("window", bcsSource);
+  run(global.window);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  const before = summaryCalls;
+  sockets[0].onmessage({ data: JSON.stringify({ seq: "1-1", type: "subtask.result", payload: { status: "SUCCESS" } }) });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.ok(summaryCalls > before, "dashboard refreshed on event");
+});
+
+test("bcs.js records last_seq and reconnects on close", async () => {
+  const { document } = createDom();
+  global.document = document;
+  global.window = {};
+  stubFetch(() => ({ json: { devices: [] } }));
+  const sockets = stubWebSocketClass({});
+  const run = new Function("window", bcsSource);
+  run(global.window);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  sockets[0].onmessage({ data: JSON.stringify({ seq: "7-0", type: "ping" }) });
+  sockets[0].close();
+  await new Promise((resolve) => setTimeout(resolve, 5200));
+  assert.ok(sockets.length >= 2, "reconnected after close");
+  assert.ok(
+    sockets.some((socket) => socket.url.includes("last_seq=7-0")),
+    "reconnect carries last_seq"
+  );
+});

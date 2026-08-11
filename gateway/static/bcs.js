@@ -171,6 +171,56 @@
     });
   }
 
+  let lastSeq = "";
+  let wsRetryTimer = null;
+
+  function refreshByEvent(message) {
+    const type = message.type || "";
+    if (type === "subtask.result" || type === "task.created" ||
+        type === "task.started" || type === "task.missed" ||
+        type === "account.status" || type === "account.circuit_broken" ||
+        type === "account.probe_scheduled") {
+      if (document.querySelector("#panel-dashboard")) {
+        loadDashboard();
+      }
+      if (document.querySelector("#panel-tasks")) {
+        loadSubtaskCounts();
+      }
+    }
+  }
+
+  function connectWebSocket() {
+    if (typeof WebSocket === "undefined") {
+      return;
+    }
+    try {
+      const wsBase = CENTRAL_URL.replace(/^http/, "ws");
+      const query = "tenant_id=" + encodeURIComponent(TENANT_ID) +
+        (lastSeq ? "&last_seq=" + encodeURIComponent(lastSeq) : "");
+      const socket = new WebSocket(wsBase + "/ws/events?" + query);
+      socket.onmessage = function (event) {
+        let message;
+        try {
+          message = JSON.parse(event.data);
+        } catch (error) {
+          return;
+        }
+        if (message.seq) {
+          lastSeq = message.seq;
+        }
+        refreshByEvent(message);
+      };
+      socket.onclose = function () {
+        wsRetryTimer = setTimeout(connectWebSocket, 5000);
+      };
+      socket.onerror = function () {
+        socket.close();
+      };
+    } catch (error) {
+      wsRetryTimer = setTimeout(connectWebSocket, 10000);
+    }
+  }
+
   function start() {
     wireTaskForm();
     if (document.querySelector("#panel-dashboard")) {
@@ -182,6 +232,7 @@
     if (document.querySelector("#panel-tasks")) {
       loadSubtaskCounts();
     }
+    connectWebSocket();
   }
 
   if (document.readyState === "loading") {

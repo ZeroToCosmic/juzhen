@@ -18,11 +18,15 @@ _session_factory = None
 def get_engine():
     global _engine
     if _engine is None:
-        config.CENTRAL_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-        _engine = create_engine(
-            f"sqlite:///{config.CENTRAL_DB_PATH}",
-            connect_args={"check_same_thread": False},
-        )
+        url = config.CENTRAL_DB_URL
+        if url.startswith("sqlite:///"):
+            config.CENTRAL_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+            _engine = create_engine(
+                f"sqlite:///{config.CENTRAL_DB_PATH}",
+                connect_args={"check_same_thread": False},
+            )
+        else:
+            _engine = create_engine(url)
     return _engine
 
 

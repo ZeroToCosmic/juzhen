@@ -10,6 +10,9 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 CENTRAL_DB_PATH = Path(
     os.getenv("CENTRAL_DB_PATH", PROJECT_ROOT / "data" / "central" / "central.db")
 )
+CENTRAL_DB_URL = os.getenv(
+    "CENTRAL_DB_URL", f"sqlite:///{CENTRAL_DB_PATH}"
+)
 REDIS_URL = os.getenv("CENTRAL_REDIS_URL", "redis://127.0.0.1:6379/0")
 CORS_ALLOW_ORIGINS = [
     origin.strip()
