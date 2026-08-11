@@ -12,6 +12,7 @@ from __future__ import annotations
 import uuid
 from collections import deque
 from collections.abc import Iterable
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -26,6 +27,17 @@ router = APIRouter(prefix="/api/central/tasks", tags=["tasks"])
 
 TASK_TYPES = frozenset({"publish", "browse", "comment", "like", "follow", "deploy"})
 PRIORITIES = frozenset({"high", "medium", "low"})
+MISSED_POLICIES = frozenset({"immediate", "skip"})
+
+
+def parse_iso(value: str, field_name: str) -> datetime:
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise ValueError(f"{field_name} must be ISO-8601") from error
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
 
 
 class DependencySpec(BaseModel):
@@ -43,6 +55,7 @@ class TaskCreateRequest(BaseModel):
     deadline: str = Field(default="", max_length=64)
     config_snapshot: dict = Field(default_factory=dict)
     dependencies: list[DependencySpec] = Field(default_factory=list)
+    schedule: dict = Field(default_factory=dict)
 
 
 def detect_cycle(nodes: Iterable[str], edges: Iterable[tuple[str, str]]) -> list[str]:
@@ -115,6 +128,25 @@ def create_task(
         "params": payload.params,
         **payload.config_snapshot,
     }
+
+    schedule = dict(payload.schedule)
+    deadline = None
+    try:
+        if payload.deadline:
+            deadline = parse_iso(payload.deadline, "deadline")
+        run_at = schedule.get("run_at", "")
+        if run_at:
+            schedule["run_at"] = parse_iso(run_at, "schedule.run_at").isoformat()
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    missed_policy = schedule.get("missed_policy", "skip")
+    if missed_policy not in MISSED_POLICIES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"invalid missed_policy: {missed_policy}",
+        )
+    scheduled = bool(run_at or deadline)
+
     task = Task(
         task_id=task_id,
         tenant_id=tenant_id,
@@ -122,9 +154,10 @@ def create_task(
         params=payload.params,
         strategy_version=payload.strategy_version,
         config_snapshot=snapshot,
-        schedule={},
+        schedule=schedule,
+        deadline=deadline,
         priority=payload.priority,
-        status="QUEUED",
+        status="PENDING" if scheduled else "QUEUED",
     )
     session.add(task)
     session.flush()
@@ -184,6 +217,16 @@ def create_task(
             "subtask_count": len(payload.account_ids),
         },
     )
+    try:
+        from central import app as central_app
+
+        central_app.event_store.publish(
+            tenant_id,
+            "task.created",
+            {"task_id": task_id, "subtask_count": len(payload.account_ids)},
+        )
+    except BaseException:
+        pass
 
     return {
         "task_id": task_id,

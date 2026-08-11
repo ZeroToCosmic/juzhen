@@ -4,23 +4,29 @@ Endpoints:
 - GET  /healthz                 central liveness
 - POST /api/central/devices/heartbeat   device heartbeat + capabilities + capacity
 - POST /api/central/devices/{device_id}/offline  explicit offline report
+- WS   /ws/events               realtime event channel (PRD F4a)
 """
 
 from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, WebSocket
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from central import config
 from central.accounts import router as accounts_router
+from central.dashboard import router as dashboard_router
 from central.db import get_session, init_db
 from central.devices import router as devices_router
+from central.events import EventStore, MemoryEventStore, RedisEventStore
+from central.human_review import router as human_review_router
 from central.models import Device, DeviceSession
 from central.scheduler import router as scheduler_router
+from central.settings import router as settings_router
 from central.tasks import router as tasks_router
+from central.websocket import websocket_events
 
 app = FastAPI(title="Business Control Central", version="0.1.0")
 
@@ -28,6 +34,30 @@ app.include_router(devices_router)
 app.include_router(accounts_router)
 app.include_router(tasks_router)
 app.include_router(scheduler_router)
+app.include_router(human_review_router)
+app.include_router(dashboard_router)
+app.include_router(settings_router)
+
+
+def _create_event_store() -> EventStore:
+    try:
+        import redis
+
+        client = redis.Redis.from_url(
+            config.REDIS_URL, socket_timeout=2, decode_responses=True
+        )
+        client.ping()
+        return RedisEventStore(client)
+    except BaseException:
+        return MemoryEventStore()
+
+
+event_store = _create_event_store()
+
+
+@app.websocket("/ws/events")
+async def ws_events(websocket: WebSocket) -> None:
+    await websocket_events(websocket, event_store)
 
 
 @app.on_event("startup")

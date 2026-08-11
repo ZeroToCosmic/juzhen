@@ -2,16 +2,19 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from central import config
 from central.assignment import dispatch_queued
 from central.db import get_session
 from central.dependencies import activate_ready_dependents, submit_handle
 from central.inbox import try_dedupe
 from central.leases import reclaim_stale, renew_lease
-from central.models import SubTask, TaskResult
+from central.models import SubTask, Task, TaskResult
 from central.security import require_tenant
 
 router = APIRouter(prefix="/api/central", tags=["scheduler"])
@@ -28,6 +31,75 @@ def scheduler_tick(
     activation = activate_ready_dependents(session, tenant_id=tenant_id)
     dispatch = dispatch_queued(session, tenant_id=tenant_id)
     return {"reclaim": reclaim, "activation": activation, "dispatch": dispatch}
+
+
+def _publish_event(tenant_id: str, event_type: str, payload: dict) -> None:
+    try:
+        from central import app as central_app
+
+        central_app.event_store.publish(tenant_id, event_type, payload)
+    except BaseException:
+        pass
+
+
+@router.post("/scheduler/scheduled")
+def scheduled_tick(
+    tenant_id: str = Depends(require_tenant),
+    session: Session = Depends(get_session),
+) -> dict:
+    now = datetime.now(timezone.utc)
+    started = 0
+    missed = 0
+    tasks = (
+        session.query(Task)
+        .filter(Task.tenant_id == tenant_id, Task.status == "PENDING")
+        .all()
+    )
+    for task in tasks:
+        run_at = task.schedule.get("run_at", "")
+        if run_at:
+            try:
+                run_at_dt = datetime.fromisoformat(run_at)
+            except ValueError:
+                continue
+            if run_at_dt.tzinfo is None:
+                run_at_dt = run_at_dt.replace(tzinfo=timezone.utc)
+            if run_at_dt <= now:
+                overrun = (now - run_at_dt).total_seconds()
+                policy = task.schedule.get("missed_policy", "skip")
+                if overrun > config.MISSED_WINDOW_SECONDS and policy != "immediate":
+                    task.status = "MISSED"
+                    task.revision += 1
+                    missed += 1
+                    _publish_event(
+                        tenant_id,
+                        "task.missed",
+                        {"task_id": task.task_id, "reason": "run_at_overrun"},
+                    )
+                    continue
+                task.status = "QUEUED"
+                task.revision += 1
+                started += 1
+                _publish_event(
+                    tenant_id,
+                    "task.started",
+                    {"task_id": task.task_id},
+                )
+                continue
+        if task.deadline is not None and task.status == "PENDING":
+            deadline = task.deadline
+            if deadline.tzinfo is None:
+                deadline = deadline.replace(tzinfo=timezone.utc)
+            if now >= deadline:
+                task.status = "MISSED"
+                task.revision += 1
+                missed += 1
+                _publish_event(
+                    tenant_id,
+                    "task.missed",
+                    {"task_id": task.task_id, "reason": "deadline"},
+                )
+    return {"started": started, "missed": missed}
 
 
 @router.get("/agent/subtasks")
@@ -134,6 +206,16 @@ def submit_result(
             subtask.status = "DLQ"
     subtask.last_progress_at = None
     subtask.revision += 1
+    try:
+        from central import app as central_app
+
+        central_app.event_store.publish(
+            tenant_id,
+            "subtask.result",
+            {"subtask_id": payload.subtask_id, "status": subtask.status},
+        )
+    except BaseException:
+        pass
     return {"subtask_id": payload.subtask_id, "status": subtask.status}
 
 
