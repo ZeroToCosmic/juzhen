@@ -11,6 +11,14 @@ CENTRAL_DB_PATH = Path(
     os.getenv("CENTRAL_DB_PATH", PROJECT_ROOT / "data" / "central" / "central.db")
 )
 REDIS_URL = os.getenv("CENTRAL_REDIS_URL", "redis://127.0.0.1:6379/0")
+CORS_ALLOW_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv(
+        "CENTRAL_CORS_ORIGINS",
+        "http://127.0.0.1:5000,http://localhost:5000",
+    ).split(",")
+    if origin.strip()
+]
 DEFAULT_TENANT_ID = os.getenv("CENTRAL_DEFAULT_TENANT", "tenant-default")
 HEARTBEAT_ONLINE_SECONDS = int(os.getenv("HEARTBEAT_ONLINE_SECONDS", "90"))
 LEASE_TIMEOUT_SECONDS = int(os.getenv("LEASE_TIMEOUT_SECONDS", "300"))

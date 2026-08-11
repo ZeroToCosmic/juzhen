@@ -12,6 +12,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from fastapi import Depends, FastAPI, WebSocket
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -30,6 +31,13 @@ from central.tasks import router as tasks_router
 from central.websocket import websocket_events
 
 app = FastAPI(title="Business Control Central", version="0.1.0")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=config.CORS_ALLOW_ORIGINS,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 app.include_router(devices_router)
 app.include_router(accounts_router)

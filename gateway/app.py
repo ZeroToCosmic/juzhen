@@ -118,6 +118,7 @@ from gateway.publish_queue import (
 )
 from gateway.r2_client import list_r2_video_objects
 from gateway.routes_accounts import create_routes_accounts_blueprint
+from gateway.routes_bcs import bp as bcs_blueprint
 from gateway.routes_health import create_health_blueprint
 from gateway.routes_ip import create_routes_ip_blueprint
 from gateway.routes_pages import bp as pages_blueprint
@@ -679,6 +680,7 @@ def create_app(config: dict | None = None) -> Flask:
     app.register_blueprint(create_routes_publish_blueprint())
     app.register_blueprint(legacy_browser_blueprint)
     app.register_blueprint(pages_blueprint)
+    app.register_blueprint(bcs_blueprint)
     sanitize_browser_log_file()
 
     @app.after_request
