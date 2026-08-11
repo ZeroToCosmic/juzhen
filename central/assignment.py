@@ -35,7 +35,12 @@ def dispatch_queued(session: Session, *, tenant_id: str | None = None, limit: in
             )
             .one_or_none()
         )
-        if account is None or account.deploy_status != "ACTIVE":
+        is_probe = bool(subtask.config_snapshot.get("params", {}).get("probe"))
+        if (
+            account is None
+            or account.deploy_status != "ACTIVE"
+            or (not is_probe and account.business_status != "ACTIVE")
+        ):
             skipped += 1
             continue
         subtask.profile_id = account.profile_id

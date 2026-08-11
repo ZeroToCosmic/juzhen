@@ -1,8 +1,9 @@
-"""Scheduler tick + subtask lifecycle endpoints (M2 increment 2/3/4)."""
+"""Scheduler tick + subtask lifecycle endpoints (M2 increment 2/3/4, M4 probe)."""
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+import uuid
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -14,12 +15,26 @@ from central.db import get_session
 from central.dependencies import activate_ready_dependents, submit_handle
 from central.inbox import try_dedupe
 from central.leases import reclaim_stale, renew_lease
-from central.models import SubTask, Task, TaskResult
+from central.models import Account, SubTask, Task, TaskResult
 from central.security import require_tenant
 
 router = APIRouter(prefix="/api/central", tags=["scheduler"])
 
 RETRYABLE_CATEGORIES = frozenset({"retryable", "environment"})
+CIRCUIT_BREAKER_THRESHOLD = 3
+
+
+def _is_probe_subtask(subtask: SubTask) -> bool:
+    return bool(subtask.config_snapshot.get("params", {}).get("probe"))
+
+
+def _publish_event(tenant_id: str, event_type: str, payload: dict) -> None:
+    try:
+        from central import app as central_app
+
+        central_app.event_store.publish(tenant_id, event_type, payload)
+    except BaseException:
+        pass
 
 
 @router.post("/scheduler/tick")
@@ -33,13 +48,81 @@ def scheduler_tick(
     return {"reclaim": reclaim, "activation": activation, "dispatch": dispatch}
 
 
-def _publish_event(tenant_id: str, event_type: str, payload: dict) -> None:
-    try:
-        from central import app as central_app
-
-        central_app.event_store.publish(tenant_id, event_type, payload)
-    except BaseException:
-        pass
+@router.post("/scheduler/probe")
+def probe_tick(
+    tenant_id: str = Depends(require_tenant),
+    session: Session = Depends(get_session),
+) -> dict:
+    now = datetime.now(timezone.utc)
+    accounts = (
+        session.query(Account)
+        .filter(
+            Account.tenant_id == tenant_id,
+            Account.business_status == "MANUAL_VERIFIED",
+        )
+        .all()
+    )
+    created = 0
+    skipped = 0
+    for account in accounts:
+        if account.cooldown_until is not None:
+            cooldown = account.cooldown_until
+            if cooldown.tzinfo is None:
+                cooldown = cooldown.replace(tzinfo=timezone.utc)
+            if now < cooldown:
+                skipped += 1
+                continue
+        has_active_probe = (
+            session.query(Task)
+            .join(SubTask, SubTask.task_id == Task.task_id)
+            .filter(
+                Task.tenant_id == tenant_id,
+                Task.task_type == "browse",
+                SubTask.account_id == account.account_id,
+                SubTask.status.in_(("QUEUED", "ASSIGNED", "RUNNING", "WAITING_DEPENDENCY")),
+            )
+            .count()
+        )
+        if has_active_probe:
+            skipped += 1
+            continue
+        task_id = uuid.uuid4().hex
+        snapshot = {
+            "strategy_version": "1.0.0",
+            "priority": "low",
+            "params": {"probe": True, "actions": ["open", "scroll"]},
+        }
+        session.add(
+            Task(
+                task_id=task_id,
+                tenant_id=tenant_id,
+                task_type="browse",
+                params={"probe": True, "actions": ["open", "scroll"]},
+                strategy_version="1.0.0",
+                config_snapshot=snapshot,
+                schedule={},
+                priority="low",
+                status="QUEUED",
+            )
+        )
+        session.flush()
+        session.add(
+            SubTask(
+                subtask_id=uuid.uuid4().hex,
+                tenant_id=tenant_id,
+                task_id=task_id,
+                account_id=account.account_id,
+                config_snapshot=snapshot,
+                status="QUEUED",
+            )
+        )
+        created += 1
+        _publish_event(
+            tenant_id,
+            "account.probe_scheduled",
+            {"account_id": account.account_id},
+        )
+    return {"created": created, "skipped": skipped}
 
 
 @router.post("/scheduler/scheduled")
@@ -192,6 +275,40 @@ def submit_result(
             error_code=payload.error_code,
         )
     )
+
+    account = (
+        session.query(Account)
+        .filter(
+            Account.tenant_id == tenant_id,
+            Account.account_id == subtask.account_id,
+        )
+        .one_or_none()
+    )
+    circuit_broken = False
+    probe_resolved = False
+    if account is not None:
+        if payload.status == "SUCCESS":
+            account.consecutive_failures = 0
+            if _is_probe_subtask(subtask) and account.business_status == "MANUAL_VERIFIED":
+                account.business_status = "ACTIVE"
+                account.revision += 1
+                probe_resolved = True
+        else:
+            account.consecutive_failures += 1
+            if _is_probe_subtask(subtask) and account.business_status == "MANUAL_VERIFIED":
+                account.business_status = "CAPTCHA"
+                account.revision += 1
+                probe_resolved = True
+            if account.consecutive_failures >= CIRCUIT_BREAKER_THRESHOLD:
+                account.business_status = "SUSPENDED"
+                account.revision += 1
+                circuit_broken = True
+                _publish_event(
+                    tenant_id,
+                    "account.circuit_broken",
+                    {"account_id": subtask.account_id},
+                )
+
     if payload.status == "SUCCESS":
         subtask.status = "SUCCESS"
     else:
@@ -206,17 +323,22 @@ def submit_result(
             subtask.status = "DLQ"
     subtask.last_progress_at = None
     subtask.revision += 1
-    try:
-        from central import app as central_app
-
-        central_app.event_store.publish(
-            tenant_id,
-            "subtask.result",
-            {"subtask_id": payload.subtask_id, "status": subtask.status},
-        )
-    except BaseException:
-        pass
-    return {"subtask_id": payload.subtask_id, "status": subtask.status}
+    _publish_event(
+        tenant_id,
+        "subtask.result",
+        {
+            "subtask_id": payload.subtask_id,
+            "status": subtask.status,
+            "circuit_broken": circuit_broken,
+            "probe_resolved": probe_resolved,
+        },
+    )
+    return {
+        "subtask_id": payload.subtask_id,
+        "status": subtask.status,
+        "circuit_broken": circuit_broken,
+        "probe_resolved": probe_resolved,
+    }
 
 
 class LeaseRenewRequest(BaseModel):

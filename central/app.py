@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from central import config
+from central.account_states import router as account_states_router
 from central.accounts import router as accounts_router
 from central.dashboard import router as dashboard_router
 from central.db import get_session, init_db
@@ -32,6 +33,7 @@ app = FastAPI(title="Business Control Central", version="0.1.0")
 
 app.include_router(devices_router)
 app.include_router(accounts_router)
+app.include_router(account_states_router)
 app.include_router(tasks_router)
 app.include_router(scheduler_router)
 app.include_router(human_review_router)
