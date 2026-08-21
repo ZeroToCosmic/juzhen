@@ -1,0 +1,69 @@
+{
+  "proxy": {
+    "host": "",
+    "port": "",
+    "username": "",
+    "password": ""
+  },
+  "proxy_pool": {
+    "protocol": "socks5",
+    "raw": "",
+    "items": []
+  },
+  "services": {
+    "ipinfo_url": "https://ipinfo.io/json",
+    "buffer_graphql_url": "https://api.buffer.com"
+  },
+  "timeouts": {
+    "ip_check_seconds": 10,
+    "buffer_publish_seconds": 30
+  },
+  "browser": {
+    "cdp_url": "",
+    "task_goal": "",
+    "tiktok_login_url": "https://www.tiktok.com/login"
+  },
+  "adspower": {
+    "base_url": "http://local.adspower.net:50325",
+    "api_key": "",
+    "default_group_id": ""
+  },
+  "grok": {
+    "api_key_env": "XAI_API_KEY",
+    "model": "grok-4.5"
+  },
+  "models": {
+    "default_model_id": "grok-main",
+    "items": [
+      {
+        "id": "grok-main",
+        "provider": "grok",
+        "enabled": true,
+        "base_url": "https://api.x.ai/v1",
+        "api_key": "",
+        "model": "grok-4.5",
+        "mode": "responses"
+      }
+    ]
+  },
+  "execution_strategies": {
+    "items": [
+      {
+        "id": "steady_reader",
+        "label": "Steady reader",
+        "mouseMoves": 3,
+        "clicks": 0,
+        "scrolls": 2,
+        "moveSteps": [12, 22],
+        "pauseMs": [300, 900],
+        "scrollDelta": [260, 520],
+        "text_prompt": "像稳定阅读者一样浏览页面，先观察主要内容，再少量滚动。"
+      }
+    ]
+  },
+  "agent": {
+    "max_steps": 10,
+    "close_after_run": true,
+    "strategy_prompt": "Use direct browser actions only. Open the requested TikTok login page, inspect the visible state, and stop with done when the requested page state is reached. Return blocked for captcha, login challenge, unsafe action, or any request to like, follow, comment, message, or create platform engagement."
+  }
+}

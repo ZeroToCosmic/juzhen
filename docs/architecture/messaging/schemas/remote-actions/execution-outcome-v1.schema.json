@@ -1,0 +1,315 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:juzhen:remote-actions:execution-outcome:v1",
+  "title": "Remote action execution outcome HTTPS payloads v1",
+  "$defs": {
+    "effect_result": {
+      "type": "object",
+      "properties": {
+        "effect_id": {"type": "string", "pattern": "^effect_[A-Za-z0-9_-]{1,73}$", "maxLength": 80},
+        "status": {"enum": ["SKIPPED", "FAILED_PRE_EFFECT", "CONFIRMED", "UNCERTAIN"]},
+        "permit_id": {
+          "type": ["string", "null"],
+          "pattern": "^permit_[A-Za-z0-9_-]{1,73}$",
+          "maxLength": 80
+        },
+        "result": {"type": "object", "maxProperties": 128}
+      },
+      "required": ["effect_id", "status", "permit_id", "result"],
+      "allOf": [
+        {
+          "if": {
+            "properties": {"status": {"enum": ["CONFIRMED", "UNCERTAIN"]}},
+            "required": ["status"]
+          },
+          "then": {"properties": {"permit_id": {"type": "string"}}}
+        },
+        {
+          "if": {
+            "properties": {"status": {"const": "SKIPPED"}},
+            "required": ["status"]
+          },
+          "then": {"properties": {"permit_id": {"type": "null"}}}
+        }
+      ],
+      "additionalProperties": false
+    },
+    "error": {
+      "type": "object",
+      "properties": {
+        "category": {
+          "enum": [
+            "",
+            "VALIDATION",
+            "RESOURCE",
+            "TRANSIENT",
+            "BUSINESS",
+            "CANCELLED",
+            "SIDE_EFFECT_UNCERTAIN"
+          ]
+        },
+        "code": {"type": "string", "maxLength": 128},
+        "stage": {"type": "string", "maxLength": 128}
+      },
+      "required": ["category", "code", "stage"],
+      "additionalProperties": false
+    },
+    "evidence": {
+      "type": "object",
+      "properties": {
+        "evidence_id": {"type": "string", "pattern": "^ev_[A-Za-z0-9_-]{1,77}$", "maxLength": 80},
+        "type": {"type": "string", "minLength": 1, "maxLength": 64},
+        "sha256": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "maxLength": 71
+        },
+        "captured_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$",
+          "maxLength": 24
+        },
+        "available_on_device": {"const": true}
+      },
+      "required": ["evidence_id", "type", "sha256", "captured_at", "available_on_device"],
+      "additionalProperties": false
+    },
+    "outcome_request": {
+      "type": "object",
+      "properties": {
+        "operation": {"const": "outcome_request"},
+        "event_id": {"type": "string", "pattern": "^evt_[A-Za-z0-9_-]{1,76}$", "maxLength": 80},
+        "work_order_id": {"type": "string", "pattern": "^wo_[A-Za-z0-9_-]{1,77}$", "maxLength": 80},
+        "lease_generation": {"type": "integer", "minimum": 1, "maximum": 9223372036854775807},
+        "status": {
+          "enum": ["SUCCEEDED", "PARTIALLY_SUCCEEDED", "FAILED", "CANCELLED", "UNVERIFIED"]
+        },
+        "side_effect_state": {"enum": ["NONE", "CONFIRMED", "UNCERTAIN", "MIXED"]},
+        "effects": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/effect_result"},
+          "maxItems": 256,
+          "uniqueItems": true
+        },
+        "result_data": {"type": "object", "maxProperties": 256},
+        "error": {"$ref": "#/$defs/error"},
+        "started_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$",
+          "maxLength": 24
+        },
+        "finished_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$",
+          "maxLength": 24
+        },
+        "duration_ms": {"type": "integer", "minimum": 0, "maximum": 9223372036854775807},
+        "attempt": {"type": "integer", "minimum": 1, "maximum": 9223372036854775807},
+        "evidence_manifest": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/evidence"},
+          "maxItems": 128
+        },
+        "device_id": {"type": "string", "pattern": "^dev_[A-Za-z0-9_-]{1,76}$", "maxLength": 80},
+        "session_id": {"type": "string", "pattern": "^sess_[A-Za-z0-9_-]{1,75}$", "maxLength": 80},
+        "executor_version": {"type": "string", "minLength": 1, "maxLength": 64}
+      },
+      "required": [
+        "operation",
+        "event_id",
+        "work_order_id",
+        "lease_generation",
+        "status",
+        "side_effect_state",
+        "effects",
+        "result_data",
+        "error",
+        "started_at",
+        "finished_at",
+        "duration_ms",
+        "attempt",
+        "evidence_manifest",
+        "device_id",
+        "session_id",
+        "executor_version"
+      ],
+      "allOf": [
+        {
+          "if": {"properties": {"side_effect_state": {"const": "NONE"}}, "required": ["side_effect_state"]},
+          "then": {
+            "properties": {
+              "effects": {
+                "items": {
+                  "properties": {"status": {"enum": ["FAILED_PRE_EFFECT", "SKIPPED"]}}
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {"properties": {"side_effect_state": {"const": "CONFIRMED"}}, "required": ["side_effect_state"]},
+          "then": {
+            "properties": {
+              "effects": {
+                "minItems": 1,
+                "items": {"properties": {"status": {"const": "CONFIRMED"}}}
+              }
+            }
+          }
+        },
+        {
+          "if": {"properties": {"status": {"const": "SUCCEEDED"}}, "required": ["status"]},
+          "then": {
+            "properties": {
+              "side_effect_state": {"enum": ["NONE", "CONFIRMED"]},
+              "error": {
+                "properties": {
+                  "category": {"const": ""},
+                  "code": {"const": ""},
+                  "stage": {"const": ""}
+                }
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "error": {
+                "properties": {
+                  "category": {"not": {"const": ""}},
+                  "code": {"minLength": 1},
+                  "stage": {"minLength": 1}
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {"const": "SUCCEEDED"},
+              "side_effect_state": {"const": "NONE"}
+            },
+            "required": ["status", "side_effect_state"]
+          },
+          "then": {"properties": {"effects": {"maxItems": 0}}}
+        },
+        {
+          "if": {"properties": {"status": {"const": "UNVERIFIED"}}, "required": ["status"]},
+          "then": {
+            "properties": {
+              "side_effect_state": {"enum": ["UNCERTAIN", "MIXED"]},
+              "effects": {
+                "contains": {"properties": {"status": {"const": "UNCERTAIN"}}, "required": ["status"]}
+              },
+              "error": {"properties": {"category": {"const": "SIDE_EFFECT_UNCERTAIN"}}}
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "effects": {
+                "contains": {"properties": {"status": {"const": "UNCERTAIN"}}, "required": ["status"]}
+              }
+            },
+            "required": ["effects"]
+          },
+          "then": {"properties": {"status": {"const": "UNVERIFIED"}}}
+        },
+        {
+          "if": {"properties": {"status": {"const": "PARTIALLY_SUCCEEDED"}}, "required": ["status"]},
+          "then": {
+            "properties": {
+              "side_effect_state": {"const": "MIXED"},
+              "effects": {
+                "minItems": 2,
+                "allOf": [
+                  {
+                    "contains": {
+                      "properties": {"status": {"const": "CONFIRMED"}},
+                      "required": ["status"]
+                    }
+                  },
+                  {
+                    "contains": {
+                      "properties": {"status": {"enum": ["FAILED_PRE_EFFECT", "SKIPPED"]}},
+                      "required": ["status"]
+                    }
+                  },
+                  {
+                    "not": {
+                      "contains": {
+                        "properties": {"status": {"const": "UNCERTAIN"}},
+                        "required": ["status"]
+                      }
+                    }
+                  }
+                ]
+              },
+              "error": {"properties": {"category": {"enum": ["BUSINESS", "CANCELLED"]}}}
+            }
+          }
+        },
+        {
+          "if": {"properties": {"status": {"const": "CANCELLED"}}, "required": ["status"]},
+          "then": {
+            "properties": {
+              "side_effect_state": {"const": "NONE"},
+              "effects": {
+                "items": {
+                  "properties": {
+                    "status": {"enum": ["SKIPPED", "FAILED_PRE_EFFECT"]}
+                  }
+                }
+              },
+              "error": {"properties": {"category": {"const": "CANCELLED"}}}
+            }
+          }
+        },
+        {
+          "if": {"properties": {"status": {"const": "FAILED"}}, "required": ["status"]},
+          "then": {
+            "properties": {
+              "side_effect_state": {"const": "NONE"},
+              "effects": {
+                "items": {"properties": {"status": {"enum": ["FAILED_PRE_EFFECT", "SKIPPED"]}}}
+              },
+              "error": {
+                "properties": {
+                  "category": {"enum": ["TRANSIENT", "BUSINESS"]}
+                }
+              }
+            }
+          }
+        }
+      ],
+      "additionalProperties": false
+    },
+    "outcome_ack": {
+      "type": "object",
+      "properties": {
+        "operation": {"const": "outcome_ack"},
+        "result_event_id": {"type": "string", "pattern": "^evt_[A-Za-z0-9_-]{1,76}$", "maxLength": 80},
+        "aggregate_status": {
+          "enum": [
+            "SUCCEEDED",
+            "PARTIALLY_SUCCEEDED",
+            "FAILED",
+            "CANCELLED",
+            "UNVERIFIED",
+            "RECONCILING"
+          ]
+        }
+      },
+      "required": ["operation", "result_event_id", "aggregate_status"],
+      "additionalProperties": false
+    }
+  },
+  "oneOf": [
+    {"$ref": "#/$defs/outcome_request"},
+    {"$ref": "#/$defs/outcome_ack"}
+  ]
+}

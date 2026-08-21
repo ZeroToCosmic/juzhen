@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:local:architecture:webhook-outbox",
+  "title": "Selector alert webhook outbox row contract",
+  "type": "object",
+  "properties": {
+    "alert_id": {"type": "integer", "minimum": 1},
+    "event_type": {"type": "string", "minLength": 1},
+    "payload": {"type": "object"},
+    "status": {"enum": ["pending", "processing", "completed", "failed"]},
+    "attempt_count": {"type": "integer", "minimum": 0},
+    "next_attempt_at": {"type": "string", "format": "date-time"},
+    "claim_generation": {"type": "integer", "minimum": 0}
+  },
+  "required": ["alert_id", "event_type", "payload", "status", "attempt_count", "next_attempt_at", "claim_generation"],
+  "additionalProperties": false
+}

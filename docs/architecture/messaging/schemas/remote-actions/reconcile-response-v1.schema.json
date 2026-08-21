@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:juzhen:remote-actions:reconcile-response:v1",
+  "title": "Remote action reconcile response v1",
+  "type": "object",
+  "$defs": {
+    "missing_command": {
+      "type": "object",
+      "properties": {
+        "command_id": {"type": "string", "pattern": "^cmd_[A-Za-z0-9_-]{1,76}$", "maxLength": 80},
+        "server_sequence": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9223372036854775807
+        }
+      },
+      "required": ["command_id", "server_sequence"],
+      "additionalProperties": false
+    },
+    "lease": {
+      "type": "object",
+      "properties": {
+        "work_order_id": {"type": "string", "pattern": "^wo_[A-Za-z0-9_-]{1,77}$", "maxLength": 80},
+        "lease_generation": {"type": "integer", "minimum": 1, "maximum": 9223372036854775807}
+      },
+      "required": ["work_order_id", "lease_generation"],
+      "additionalProperties": false
+    },
+    "stop_generation": {
+      "type": "object",
+      "properties": {
+        "work_order_id": {"type": "string", "pattern": "^wo_[A-Za-z0-9_-]{1,77}$", "maxLength": 80},
+        "lease_generation": {"type": "integer", "minimum": 1, "maximum": 9223372036854775807},
+        "reason_code": {"type": "string", "minLength": 1, "maxLength": 64}
+      },
+      "required": ["work_order_id", "lease_generation", "reason_code"],
+      "additionalProperties": false
+    }
+  },
+  "properties": {
+    "missing_commands": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/missing_command"},
+      "maxItems": 100
+    },
+    "valid_leases": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/lease"},
+      "maxItems": 100
+    },
+    "confirmed_result_event_ids": {
+      "type": "array",
+      "items": {"type": "string", "pattern": "^evt_[A-Za-z0-9_-]{1,76}$", "maxLength": 80},
+      "maxItems": 256,
+      "uniqueItems": true
+    },
+    "stop_generations": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/stop_generation"},
+      "maxItems": 100
+    }
+  },
+  "required": [
+    "missing_commands",
+    "valid_leases",
+    "confirmed_result_event_ids",
+    "stop_generations"
+  ],
+  "additionalProperties": false
+}

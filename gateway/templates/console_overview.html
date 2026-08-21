@@ -1,0 +1,33 @@
+{% extends 'console_base.html' %}
+{% block title %}运行总览 · Agent 自动化主控台{% endblock %}
+{% block content %}
+<div id="console-overview" class="console-page">
+  <header class="console-page-head">
+    <div><h1>运行总览</h1><p>查看本机 Agent、业务队列和采集服务的当前状态</p></div>
+    <button class="console-button" id="overview-refresh" type="button">刷新状态</button>
+  </header>
+  <section id="local-runtime" class="console-section" aria-labelledby="local-runtime-title">
+    <div class="console-section-head">
+      <div><h2 id="local-runtime-title">本机状态</h2><p>本机接口、浏览器和采集进程的当前可用情况</p></div>
+      <span id="overview-runtime-updated" class="console-muted">尚未刷新</span>
+    </div>
+    <div class="console-stat-grid" aria-label="本机状态">
+      <article class="console-stat"><span>本机网关</span><strong id="overview-runtime-gateway">—</strong><small id="overview-runtime-gateway-note">正在读取</small></article>
+      <article class="console-stat"><span>浏览器 Profile</span><strong id="overview-runtime-profiles">—</strong><small id="overview-runtime-profiles-note">正在读取</small></article>
+      <article class="console-stat"><span>数据采集服务</span><strong id="overview-runtime-scraper">—</strong><small id="overview-runtime-scraper-note">正在读取</small></article>
+      <article class="console-stat"><span>本机采集调度</span><strong id="overview-runtime-worker">—</strong><small id="overview-runtime-worker-note">正在读取</small></article>
+    </div>
+  </section>
+  <section class="console-section">
+    <div class="console-section-head"><div><h2>常用入口</h2><p>进入对应业务模块继续处理</p></div></div>
+    <div class="console-link-grid">
+      <a href="/console/actions"><b>动作库</b><span>维护浏览器动作与评论 Campaign</span></a>
+      <a href="/console/publishing"><b>内容发布</b><span>创建和查看批量发布任务</span></a>
+      <a href="/console/collection"><b>数据采集</b><span>管理采集对象与运行记录</span></a>
+      <a href="/console/collection-results"><b>采集结果</b><span>查看视频核心业务指标</span></a>
+    </div>
+  </section>
+  <p class="console-status" id="overview-status" role="status"></p>
+</div>
+{% endblock %}
+{% block scripts %}<script src="{{ url_for('static', filename='console_overview.js') }}"></script>{% endblock %}

@@ -1,0 +1,69 @@
+{% extends 'console_base.html' %}
+{% block title %}新建评论 Campaign · 动作库{% endblock %}
+{% block styles %}
+<link rel="stylesheet" href="{{ url_for('static', filename='console_comment_campaign_create.css') }}">
+{% endblock %}
+{% block content %}
+<div id="console-comment-campaign-create" class="console-page" data-state="loading">
+  <a class="console-back-button" href="{{ url_for('console.actions') }}">← 返回动作库</a>
+  <header class="console-page-head campaign-create-head">
+    <div>
+      <h1>新建评论 Campaign</h1>
+      <p>创建一个使用现有评论树和本机 Profile 的调试 Campaign。</p>
+    </div>
+    <button id="campaign-create-submit" class="console-button primary" type="submit" form="campaign-create-form">创建 Campaign</button>
+  </header>
+
+  <form id="campaign-create-form" novalidate>
+    <section class="console-section" aria-labelledby="campaign-basic-title">
+      <div class="console-section-head"><div><h2 id="campaign-basic-title">基本信息</h2></div></div>
+      <div class="console-form-grid campaign-create-grid">
+        <label class="wide"><span>Campaign 名称</span><input id="campaign-name" class="console-control" name="name" maxlength="100" autocomplete="off" required><small id="campaign-name-error" class="campaign-field-error" hidden></small></label>
+        <label class="wide"><span>TikTok 视频链接</span><input id="campaign-target-reference" class="console-control" name="target_reference" type="url" autocomplete="off" required><small id="campaign-target-reference-error" class="campaign-field-error" hidden></small></label>
+      </div>
+    </section>
+
+    <section class="console-section" aria-labelledby="campaign-config-title">
+      <div class="console-section-head">
+        <div><h2 id="campaign-config-title">评论配置</h2></div>
+        <div class="console-section-actions">
+          <a class="console-button" href="/console/actions/comment-trees" target="_blank" rel="noopener">管理评论树</a>
+          <button id="campaign-template-refresh" class="console-button" type="button">刷新评论树</button>
+        </div>
+      </div>
+      <div class="console-form-grid campaign-create-grid">
+        <label><span>评论模式</span><select id="campaign-mode" class="console-control" name="mode"><option value="independent">独立评论</option><option value="threaded">盖楼回复</option></select><small id="campaign-mode-error" class="campaign-field-error" hidden></small></label>
+        <label><span>评论树</span><select id="campaign-template" class="console-control" name="template_id"><option value="">请选择评论树</option></select><small id="campaign-template-error" class="campaign-field-error" hidden></small></label>
+        <label><span>每批数量</span><input id="campaign-batch-size" class="console-control" name="batch_size" type="number" min="1" max="8" step="1" value="3"><small id="campaign-batch-size-error" class="campaign-field-error" hidden></small></label>
+      </div>
+      <p id="campaign-template-empty" class="console-empty" hidden>当前没有可用评论树，请先创建或启用评论树。</p>
+    </section>
+
+    <section class="console-section" aria-labelledby="campaign-profile-title">
+      <div class="console-section-head"><div><h2 id="campaign-profile-title">Profile 分配</h2></div></div>
+      <fieldset id="campaign-selection-mode" class="campaign-selection-mode">
+        <legend>选择方式</legend>
+        <label><input id="campaign-selection-automatic" name="selection_mode" type="radio" value="automatic" checked> 自动选择</label>
+        <label><input id="campaign-selection-manual" name="selection_mode" type="radio" value="manual"> 手动选择</label>
+      </fieldset>
+      <div id="campaign-selection-summary" class="campaign-selection-summary" aria-live="polite">
+        <span>需要 <strong id="campaign-required-count">—</strong></span>
+        <span>可用 <strong id="campaign-eligible-count">—</strong></span>
+        <span>已选 <strong id="campaign-selected-count">0</strong></span>
+        <span>缺少 <strong id="campaign-shortage-count">—</strong></span>
+      </div>
+      <label id="campaign-profile-search-wrap" hidden><span>搜索 Profile</span><input id="campaign-profile-search" class="console-control search" type="search" autocomplete="off"></label>
+      <div id="campaign-profile-table-wrap" class="console-table-wrap" hidden>
+        <table class="console-dense-table"><thead><tr><th class="action">选择</th><th>Profile</th><th>语言/地区</th><th>状态</th></tr></thead><tbody id="campaign-profile-body"></tbody></table>
+      </div>
+      <p id="campaign-profile-empty" class="console-empty" hidden>暂无可选择的 Profile。</p>
+      <p id="campaign-profile-error" class="campaign-field-error" hidden></p>
+    </section>
+  </form>
+
+  <p id="campaign-create-status" class="console-status" role="status" aria-live="polite"></p>
+</div>
+{% endblock %}
+{% block scripts %}
+<script defer src="{{ url_for('static', filename='console_comment_campaign_create.js') }}"></script>
+{% endblock %}

@@ -1,0 +1,15 @@
+{% extends 'console_base.html' %}
+{% block title %}系统设置 · Agent 自动化主控台{% endblock %}
+{% block styles %}<link rel="stylesheet" href="{{ url_for('static', filename='console_settings.css') }}">{% endblock %}
+{% block content %}
+<div id="console-settings" class="console-page">
+  <header class="console-page-head">
+    <div><h1>系统设置</h1><p>维护本机 Agent 的网络、浏览器、发布、存储、采集和模型配置。</p></div>
+  </header>
+  {% include '_console_settings_workspace.html' %}
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='console_settings.js') }}"></script>
+<script src="{{ url_for('static', filename='console_settings_page.js') }}"></script>
+{% endblock %}

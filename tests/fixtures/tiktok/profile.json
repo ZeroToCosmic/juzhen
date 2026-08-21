@@ -1,0 +1,18 @@
+{
+  "code": 200,
+  "router": "/api/tiktok/web/fetch_user_profile",
+  "data": {
+    "userInfo": {
+      "user": {
+        "secUid": "MS4wLjABAAAA-example-sec-uid",
+        "uniqueId": "example_creator"
+      },
+      "stats": {
+        "followerCount": 1200,
+        "followingCount": 34,
+        "heartCount": 5678,
+        "videoCount": 9
+      }
+    }
+  }
+}

@@ -1,0 +1,465 @@
+{
+  "vectors": [
+    {
+      "schema": "wss-envelope-v1.schema.json",
+      "valid": {
+        "type": "COMMAND_ACK",
+        "protocol_version": "1.0",
+        "message_id": "msg_2f2bcf5d9d664b75a7c5aa48e8caf601",
+        "device_id": "dev_7f9823833838463b8bd121d0ff0ed9a8",
+        "session_id": "sess_b1318dfe6c7d4b89ab0de92315ec6264",
+        "sent_at": "2026-08-20T10:00:00.000Z",
+        "payload": {
+          "command_id": "cmd_2f2bcf5d9d664b75a7c5aa48e8caf601",
+          "work_order_id": "wo_841de8c423d14aa48ef4c0a868409983",
+          "ack_kind": "RECEIVED",
+          "run_id": "run_c84388c68ab44a8b8dd43607071d4d16",
+          "persisted_at": "2026-08-20T10:00:00.000Z"
+        }
+      },
+      "missing": {"path": ["message_id"]},
+      "wrong_type": {"path": ["payload"], "value": []},
+      "extra": {"property": "tenant_id", "value": "tenant-a"},
+      "oversize": {"path": ["message_id"], "kind": "string"}
+    },
+    {
+      "schema": "work-order-v1.schema.json",
+      "valid": {
+        "protocol_version": "1.0",
+        "command_id": "cmd_2f2bcf5d9d664b75a7c5aa48e8caf601",
+        "task_id": "task_21940a5c252847539774bd218e668f34",
+        "work_order_id": "wo_841de8c423d14aa48ef4c0a868409983",
+        "device_id": "dev_7f9823833838463b8bd121d0ff0ed9a8",
+        "lease_generation": 3,
+        "executor_kind": "comment_campaign",
+        "definition": {
+          "action_id": "act_01ARZ3NDEKTSV4RRFFQ69G5FAV",
+          "revision": 7,
+          "content_checksum": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+          "release_checksum": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "definition_schema_version": "1.0",
+          "parameter_schema": {"type": "object"},
+          "result_schema": {"type": "object"},
+          "snapshot": {"nodes": [{"node_id": "root", "text": "Hello"}]},
+          "execution_defaults": {"navigation_timeout_seconds": 30}
+        },
+        "runtime_params": {"target_url": "https://www.tiktok.com/@demo/video/1"},
+        "resource_reservations": [
+          {
+            "resource_key": "account:acct_1",
+            "resource_type": "account",
+            "account_id": "acct_1"
+          },
+          {
+            "resource_key": "window:dev_7f9823833838463b8bd121d0ff0ed9a8:win_1",
+            "resource_type": "window",
+            "device_id": "dev_7f9823833838463b8bd121d0ff0ed9a8",
+            "window_ref": "win_1"
+          }
+        ],
+        "effect_plan": [
+          {
+            "effect_id": "effect_comment_root",
+            "dependencies": [],
+            "result_schema": {"type": "object"}
+          }
+        ],
+        "execution_policy": {
+          "deadline_at": "2026-08-20T10:30:00.000Z",
+          "pre_effect_max_attempts": 2,
+          "cancel_mode": "SAFE_CHECKPOINT",
+          "evidence_types": ["screenshot"]
+        }
+      },
+      "missing": {"path": ["command_id"]},
+      "wrong_type": {"path": ["lease_generation"], "value": "3"},
+      "extra": {"property": "strategy_id", "value": "legacy"},
+      "oversize": {"path": ["executor_kind"], "kind": "string"}
+    },
+    {
+      "schema": "command-ack-v1.schema.json",
+      "valid": {
+        "command_id": "cmd_2f2bcf5d9d664b75a7c5aa48e8caf601",
+        "work_order_id": "wo_841de8c423d14aa48ef4c0a868409983",
+        "ack_kind": "RECEIVED",
+        "run_id": "run_c84388c68ab44a8b8dd43607071d4d16",
+        "persisted_at": "2026-08-20T10:00:01.000Z"
+      },
+      "missing": {"path": ["command_id"]},
+      "wrong_type": {"path": ["ack_kind"], "value": 1, "validator": "enum"},
+      "extra": {"property": "server_sequence", "value": 42},
+      "oversize": {"path": ["run_id"], "kind": "string"}
+    },
+    {
+      "schema": "cancel-command-v1.schema.json",
+      "valid": {
+        "command_id": "cmd_cancel_7e68fcd3f62a450ab80b107cae15e761",
+        "work_order_id": "wo_841de8c423d14aa48ef4c0a868409983",
+        "lease_generation": 3,
+        "reason_code": "USER_CANCELLED"
+      },
+      "missing": {"path": ["command_id"]},
+      "wrong_type": {"path": ["lease_generation"], "value": "3"},
+      "extra": {"property": "force", "value": true},
+      "oversize": {"path": ["reason_code"], "kind": "string"}
+    },
+    {
+      "schema": "progress-event-v1.schema.json",
+      "valid": {
+        "event_id": "evt_779eb77097c14192bd0c5b7fdf6ce8f8",
+        "work_order_id": "wo_841de8c423d14aa48ef4c0a868409983",
+        "lease_generation": 3,
+        "run_id": "run_c84388c68ab44a8b8dd43607071d4d16",
+        "status": "RUNNING",
+        "stage": "opening_target",
+        "occurred_at": "2026-08-20T10:00:03.000Z",
+        "summary": {"completed_effects": 0, "target_ready": true}
+      },
+      "missing": {"path": ["event_id"]},
+      "wrong_type": {"path": ["lease_generation"], "value": "3"},
+      "extra": {"property": "mouse_x", "value": 100},
+      "oversize": {"path": ["stage"], "kind": "string", "length": 129}
+    },
+    {
+      "schema": "terminal-reference-v1.schema.json",
+      "valid": {
+        "work_order_id": "wo_841de8c423d14aa48ef4c0a868409983",
+        "lease_generation": 3,
+        "status": "SUCCEEDED",
+        "result_event_id": "evt_58e9483e43834a008f33d5786b5b6906"
+      },
+      "missing": {"path": ["result_event_id"]},
+      "wrong_type": {"path": ["lease_generation"], "value": "3"},
+      "extra": {"property": "result_data", "value": {}},
+      "oversize": {"path": ["result_event_id"], "kind": "string"}
+    },
+    {
+      "schema": "reconcile-request-v1.schema.json",
+      "valid": {
+        "last_server_sequence": 42,
+        "active_work_orders": [
+          {
+            "work_order_id": "wo_841de8c423d14aa48ef4c0a868409983",
+            "lease_generation": 3,
+            "run_id": "run_c84388c68ab44a8b8dd43607071d4d16",
+            "status": "RUNNING"
+          }
+        ],
+        "pending_result_event_ids": ["evt_58e9483e43834a008f33d5786b5b6906"]
+      },
+      "missing": {"path": ["last_server_sequence"]},
+      "wrong_type": {"path": ["last_server_sequence"], "value": "42"},
+      "extra": {"property": "tenant_id", "value": "tenant-a"},
+      "oversize": {"path": ["pending_result_event_ids"], "kind": "array"}
+    },
+    {
+      "schema": "reconcile-response-v1.schema.json",
+      "valid": {
+        "missing_commands": [
+          {
+            "command_id": "cmd_2f2bcf5d9d664b75a7c5aa48e8caf601",
+            "server_sequence": 42
+          }
+        ],
+        "valid_leases": [
+          {
+            "work_order_id": "wo_841de8c423d14aa48ef4c0a868409983",
+            "lease_generation": 3
+          }
+        ],
+        "confirmed_result_event_ids": ["evt_58e9483e43834a008f33d5786b5b6906"],
+        "stop_generations": []
+      },
+      "missing": {"path": ["missing_commands"]},
+      "wrong_type": {"path": ["valid_leases"], "value": {}},
+      "extra": {"property": "reset_sequence", "value": true},
+      "oversize": {"path": ["confirmed_result_event_ids"], "kind": "array"}
+    },
+    {
+      "schema": "effect-permit-v1.schema.json",
+      "definition": "permit_request",
+      "valid": {
+        "operation": "permit_request",
+        "work_order_id": "wo_841de8c423d14aa48ef4c0a868409983",
+        "effect_id": "effect_comment_root",
+        "device_id": "dev_7f9823833838463b8bd121d0ff0ed9a8",
+        "session_id": "sess_b1318dfe6c7d4b89ab0de92315ec6264",
+        "lease_generation": 3,
+        "run_id": "run_c84388c68ab44a8b8dd43607071d4d16",
+        "request_id": "req_d07fef2406d44be6a8e2dcdd41ac1faf"
+      },
+      "missing": {"path": ["request_id"]},
+      "wrong_type": {"path": ["lease_generation"], "value": "3"},
+      "extra": {"property": "retry", "value": true},
+      "oversize": {"path": ["request_id"], "kind": "string"}
+    },
+    {
+      "schema": "effect-permit-v1.schema.json",
+      "definition": "permit_issued",
+      "valid": {
+        "operation": "permit_issued",
+        "work_order_id": "wo_841de8c423d14aa48ef4c0a868409983",
+        "effect_id": "effect_comment_root",
+        "request_id": "req_d07fef2406d44be6a8e2dcdd41ac1faf",
+        "permit_id": "permit_44d14f7315fb4626a2e2bf8d8c3e34da",
+        "permit_attempt": 1,
+        "lease_generation": 3,
+        "issued_at": "2026-08-20T10:00:04.000Z"
+      },
+      "missing": {"path": ["permit_id"]},
+      "wrong_type": {"path": ["permit_attempt"], "value": "1"},
+      "extra": {"property": "retry", "value": true},
+      "oversize": {"path": ["permit_id"], "kind": "string"}
+    },
+    {
+      "schema": "effect-permit-v1.schema.json",
+      "definition": "permit_denied",
+      "valid": {
+        "operation": "permit_denied",
+        "work_order_id": "wo_841de8c423d14aa48ef4c0a868409983",
+        "effect_id": "effect_comment_root",
+        "request_id": "req_d07fef2406d44be6a8e2dcdd41ac1faf",
+        "denial_code": "DEPENDENCY_NOT_CONFIRMED"
+      },
+      "missing": {"path": ["denial_code"]},
+      "wrong_type": {"path": ["request_id"], "value": 1},
+      "extra": {"property": "retry", "value": true},
+      "oversize": {"path": ["denial_code"], "kind": "string"}
+    },
+    {
+      "schema": "effect-permit-v1.schema.json",
+      "definition": "close_unused_request",
+      "valid": {
+        "operation": "close_unused_request",
+        "work_order_id": "wo_841de8c423d14aa48ef4c0a868409983",
+        "effect_id": "effect_comment_root",
+        "device_id": "dev_7f9823833838463b8bd121d0ff0ed9a8",
+        "session_id": "sess_b1318dfe6c7d4b89ab0de92315ec6264",
+        "lease_generation": 3,
+        "run_id": "run_c84388c68ab44a8b8dd43607071d4d16",
+        "permit_id": "permit_44d14f7315fb4626a2e2bf8d8c3e34da"
+      },
+      "missing": {"path": ["permit_id"]},
+      "wrong_type": {"path": ["lease_generation"], "value": "3"},
+      "extra": {"property": "force", "value": true},
+      "oversize": {"path": ["run_id"], "kind": "string"}
+    },
+    {
+      "schema": "effect-permit-v1.schema.json",
+      "definition": "close_unused_response",
+      "valid": {
+        "operation": "close_unused_response",
+        "work_order_id": "wo_841de8c423d14aa48ef4c0a868409983",
+        "effect_id": "effect_comment_root",
+        "permit_id": "permit_44d14f7315fb4626a2e2bf8d8c3e34da",
+        "status": "CLOSED_UNUSED",
+        "closed_at": "2026-08-20T10:00:05.000Z"
+      },
+      "missing": {"path": ["closed_at"]},
+      "wrong_type": {"path": ["status"], "value": "ISSUED", "validator": "const"},
+      "extra": {"property": "force", "value": true},
+      "oversize": {"path": ["permit_id"], "kind": "string"}
+    },
+    {
+      "schema": "execution-outcome-v1.schema.json",
+      "definition": "outcome_request",
+      "valid": {
+        "operation": "outcome_request",
+        "event_id": "evt_58e9483e43834a008f33d5786b5b6906",
+        "work_order_id": "wo_841de8c423d14aa48ef4c0a868409983",
+        "lease_generation": 3,
+        "status": "SUCCEEDED",
+        "side_effect_state": "CONFIRMED",
+        "effects": [
+          {
+            "effect_id": "effect_comment_root",
+            "status": "CONFIRMED",
+            "permit_id": "permit_44d14f7315fb4626a2e2bf8d8c3e34da",
+            "result": {"comment_id": "comment-1"}
+          }
+        ],
+        "result_data": {"confirmed_effects": 1},
+        "error": {"category": "", "code": "", "stage": ""},
+        "started_at": "2026-08-20T10:00:02.000Z",
+        "finished_at": "2026-08-20T10:00:08.000Z",
+        "duration_ms": 6000,
+        "attempt": 1,
+        "evidence_manifest": [
+          {
+            "evidence_id": "ev_14178fe4d7334158829c3efdeca4e585",
+            "type": "screenshot",
+            "sha256": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+            "captured_at": "2026-08-20T10:00:07.000Z",
+            "available_on_device": true
+          }
+        ],
+        "device_id": "dev_7f9823833838463b8bd121d0ff0ed9a8",
+        "session_id": "sess_b1318dfe6c7d4b89ab0de92315ec6264",
+        "executor_version": "1.0.0"
+      },
+      "missing": {"path": ["event_id"]},
+      "wrong_type": {"path": ["duration_ms"], "value": "6000"},
+      "extra": {"property": "raw_screenshot", "value": "base64"},
+      "oversize": {"path": ["event_id"], "kind": "string"}
+    },
+    {
+      "schema": "execution-outcome-v1.schema.json",
+      "definition": "outcome_request",
+      "valid": {
+        "operation": "outcome_request",
+        "event_id": "evt_unverified_1",
+        "work_order_id": "wo_841de8c423d14aa48ef4c0a868409983",
+        "lease_generation": 3,
+        "status": "UNVERIFIED",
+        "side_effect_state": "UNCERTAIN",
+        "effects": [
+          {
+            "effect_id": "effect_comment_root",
+            "status": "UNCERTAIN",
+            "permit_id": "permit_44d14f7315fb4626a2e2bf8d8c3e34da",
+            "result": {}
+          }
+        ],
+        "result_data": {},
+        "error": {
+          "category": "SIDE_EFFECT_UNCERTAIN",
+          "code": "platform_result_unknown",
+          "stage": "submit"
+        },
+        "started_at": "2026-08-20T10:00:02.000Z",
+        "finished_at": "2026-08-20T10:00:08.000Z",
+        "duration_ms": 6000,
+        "attempt": 1,
+        "evidence_manifest": [],
+        "device_id": "dev_7f9823833838463b8bd121d0ff0ed9a8",
+        "session_id": "sess_b1318dfe6c7d4b89ab0de92315ec6264",
+        "executor_version": "1.0.0"
+      },
+      "missing": {"path": ["event_id"]},
+      "wrong_type": {"path": ["duration_ms"], "value": "6000"},
+      "extra": {"property": "retry", "value": true},
+      "oversize": {"path": ["event_id"], "kind": "string"}
+    },
+    {
+      "schema": "execution-outcome-v1.schema.json",
+      "definition": "outcome_request",
+      "valid": {
+        "operation": "outcome_request",
+        "event_id": "evt_partial_1",
+        "work_order_id": "wo_841de8c423d14aa48ef4c0a868409983",
+        "lease_generation": 3,
+        "status": "PARTIALLY_SUCCEEDED",
+        "side_effect_state": "MIXED",
+        "effects": [
+          {
+            "effect_id": "effect_comment_root",
+            "status": "CONFIRMED",
+            "permit_id": "permit_44d14f7315fb4626a2e2bf8d8c3e34da",
+            "result": {"comment_id": "comment-1"}
+          },
+          {
+            "effect_id": "effect_comment_reply",
+            "status": "FAILED_PRE_EFFECT",
+            "permit_id": null,
+            "result": {}
+          }
+        ],
+        "result_data": {"confirmed_effects": 1},
+        "error": {"category": "BUSINESS", "code": "reply_unavailable", "stage": "reply"},
+        "started_at": "2026-08-20T10:00:02.000Z",
+        "finished_at": "2026-08-20T10:00:08.000Z",
+        "duration_ms": 6000,
+        "attempt": 1,
+        "evidence_manifest": [],
+        "device_id": "dev_7f9823833838463b8bd121d0ff0ed9a8",
+        "session_id": "sess_b1318dfe6c7d4b89ab0de92315ec6264",
+        "executor_version": "1.0.0"
+      },
+      "missing": {"path": ["event_id"]},
+      "wrong_type": {"path": ["duration_ms"], "value": "6000"},
+      "extra": {"property": "retry", "value": true},
+      "oversize": {"path": ["event_id"], "kind": "string"}
+    },
+    {
+      "schema": "execution-outcome-v1.schema.json",
+      "definition": "outcome_request",
+      "valid": {
+        "operation": "outcome_request",
+        "event_id": "evt_failed_1",
+        "work_order_id": "wo_841de8c423d14aa48ef4c0a868409983",
+        "lease_generation": 3,
+        "status": "FAILED",
+        "side_effect_state": "NONE",
+        "effects": [
+          {
+            "effect_id": "effect_comment_root",
+            "status": "FAILED_PRE_EFFECT",
+            "permit_id": null,
+            "result": {}
+          }
+        ],
+        "result_data": {},
+        "error": {"category": "BUSINESS", "code": "target_unavailable", "stage": "navigate"},
+        "started_at": "2026-08-20T10:00:02.000Z",
+        "finished_at": "2026-08-20T10:00:08.000Z",
+        "duration_ms": 6000,
+        "attempt": 1,
+        "evidence_manifest": [],
+        "device_id": "dev_7f9823833838463b8bd121d0ff0ed9a8",
+        "session_id": "sess_b1318dfe6c7d4b89ab0de92315ec6264",
+        "executor_version": "1.0.0"
+      },
+      "missing": {"path": ["event_id"]},
+      "wrong_type": {"path": ["duration_ms"], "value": "6000"},
+      "extra": {"property": "retry", "value": true},
+      "oversize": {"path": ["event_id"], "kind": "string"}
+    },
+    {
+      "schema": "execution-outcome-v1.schema.json",
+      "definition": "outcome_request",
+      "valid": {
+        "operation": "outcome_request",
+        "event_id": "evt_cancelled_1",
+        "work_order_id": "wo_841de8c423d14aa48ef4c0a868409983",
+        "lease_generation": 3,
+        "status": "CANCELLED",
+        "side_effect_state": "NONE",
+        "effects": [
+          {
+            "effect_id": "effect_comment_root",
+            "status": "FAILED_PRE_EFFECT",
+            "permit_id": "permit_closed_unused_cancelled_1",
+            "result": {"permit_status": "CLOSED_UNUSED"}
+          }
+        ],
+        "result_data": {},
+        "error": {"category": "CANCELLED", "code": "user_cancelled", "stage": "checkpoint"},
+        "started_at": "2026-08-20T10:00:02.000Z",
+        "finished_at": "2026-08-20T10:00:08.000Z",
+        "duration_ms": 6000,
+        "attempt": 1,
+        "evidence_manifest": [],
+        "device_id": "dev_7f9823833838463b8bd121d0ff0ed9a8",
+        "session_id": "sess_b1318dfe6c7d4b89ab0de92315ec6264",
+        "executor_version": "1.0.0"
+      },
+      "missing": {"path": ["event_id"]},
+      "wrong_type": {"path": ["duration_ms"], "value": "6000"},
+      "extra": {"property": "retry", "value": true},
+      "oversize": {"path": ["event_id"], "kind": "string"}
+    },
+    {
+      "schema": "execution-outcome-v1.schema.json",
+      "definition": "outcome_ack",
+      "valid": {
+        "operation": "outcome_ack",
+        "result_event_id": "evt_58e9483e43834a008f33d5786b5b6906",
+        "aggregate_status": "SUCCEEDED"
+      },
+      "missing": {"path": ["result_event_id"]},
+      "wrong_type": {"path": ["aggregate_status"], "value": 1, "validator": "enum"},
+      "extra": {"property": "result_data", "value": {}},
+      "oversize": {"path": ["result_event_id"], "kind": "string"}
+    }
+  ]
+}

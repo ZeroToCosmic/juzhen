@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:local:architecture:comment-campaign-submit",
+  "title": "Comment Campaign submit RQ arguments",
+  "type": "object",
+  "properties": {
+    "campaign_id": {"type": "string", "minLength": 1, "maxLength": 120},
+    "assignment_id": {"type": "string", "minLength": 1, "maxLength": 120},
+    "revision": {"type": "integer", "minimum": 1}
+  },
+  "required": ["campaign_id", "assignment_id", "revision"],
+  "additionalProperties": false
+}

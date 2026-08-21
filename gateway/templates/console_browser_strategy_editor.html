@@ -1,0 +1,106 @@
+{% extends 'console_base.html' %}
+{% block title %}{% if editor_mode == 'edit' %}编辑浏览器策略{% else %}新建浏览器策略{% endif %} · 动作库{% endblock %}
+{% block styles %}
+<link rel="stylesheet" href="{{ url_for('static', filename='console_browser_strategy_editor.css') }}">
+{% endblock %}
+{% block content %}
+<div id="console-browser-strategy-editor" class="console-page" data-editor-mode="{{ editor_mode }}">
+  <a class="console-back-button" href="/console/actions">← 返回动作库</a>
+
+  <header class="console-page-head strategy-editor-head">
+    <div>
+      <h1>{% if editor_mode == 'edit' %}编辑浏览器策略{% else %}新建浏览器策略{% endif %}</h1>
+      <p>配置本机可执行的浏览器动作序列。</p>
+    </div>
+    <div class="console-actions strategy-editor-actions">
+      <span id="strategy-revision" class="console-badge inactive" aria-live="polite"></span>
+      <label class="strategy-enabled-toggle">
+        <input id="strategy-enabled" name="enabled" type="checkbox" checked>
+        <span>启用</span>
+      </label>
+      <button id="strategy-save" class="console-button primary" type="button">保存策略</button>
+    </div>
+  </header>
+
+  <main id="strategy-editor-workspace">
+    <section id="strategy-settings" class="console-section" aria-labelledby="strategy-settings-title">
+      <div class="console-section-head">
+        <div>
+          <h2 id="strategy-settings-title">策略设置</h2>
+          <p>先定义策略基本信息，再编排执行动作。</p>
+        </div>
+      </div>
+      <div class="console-form-grid strategy-settings-grid">
+        <label class="wide">
+          <span>策略名称</span>
+          <input id="strategy-name" name="name" class="console-control" type="text" required autocomplete="off" placeholder="例如：发布视频并互动">
+        </label>
+        <label class="wide">
+          <span>目标网址</span>
+          <input id="strategy-target-url" name="target_url" class="console-control" type="url" value="https://www.tiktok.com/" required placeholder="https://www.tiktok.com/">
+        </label>
+        <label>
+          <span>就绪元素</span>
+          <select id="strategy-ready-element" name="readiness_element_id" class="console-control" required>
+            <option value="">请选择页面元素</option>
+          </select>
+        </label>
+        <label>
+          <span>就绪超时（秒）</span>
+          <input id="strategy-readiness-timeout" name="readiness_timeout_seconds" class="console-control" type="number" min="0.1" max="600" step="0.1" value="15" required>
+        </label>
+        <label>
+          <span>运行方式</span>
+          <select id="strategy-run-mode" name="run_mode" class="console-control">
+            <option value="once">执行一次</option>
+            <option value="duration">随机分钟范围</option>
+          </select>
+        </label>
+        <label id="strategy-minutes-wrap" hidden>
+          <span>分钟范围</span>
+          <input id="strategy-minutes" name="minutes" class="console-control" type="text" placeholder="例如 2-5">
+        </label>
+      </div>
+    </section>
+
+    <section class="console-section" aria-labelledby="strategy-actions-title">
+      <div class="console-section-head">
+        <div>
+          <h2 id="strategy-actions-title">动作序列</h2>
+          <p>按执行顺序添加动作，可在列表中调整顺序。</p>
+        </div>
+      </div>
+      <fieldset id="strategy-action-palette" class="strategy-action-palette">
+        <legend>添加动作</legend>
+        <div class="console-actions">
+          <button class="console-button" type="button" data-action-type="move">移动</button>
+          <button class="console-button" type="button" data-action-type="scroll">切换视频</button>
+          <button class="console-button" type="button" data-action-type="click">点击元素</button>
+          <button class="console-button" type="button" data-action-type="input">键盘输入</button>
+          <button class="console-button" type="button" data-action-type="wait">等待</button>
+        </div>
+      </fieldset>
+      <ol id="strategy-action-list" class="strategy-action-list" aria-label="策略动作列表"></ol>
+      <p id="strategy-action-empty" class="console-empty">尚未添加动作，请从上方选择动作类型。</p>
+    </section>
+  </main>
+
+  <section class="console-section strategy-editor-footer" aria-label="策略操作">
+    <div>
+      <h2>策略操作</h2>
+      <p>保存后可继续编辑或从动作库进入维护。</p>
+    </div>
+    <div class="console-actions">
+      <button id="strategy-copy" class="console-button" type="button"{% if editor_mode != 'edit' %} hidden{% endif %}>复制策略</button>
+      <button id="strategy-delete" class="console-button danger" type="button"{% if editor_mode != 'edit' %} hidden{% endif %}>删除策略</button>
+    </div>
+  </section>
+
+  <p id="strategy-status" class="console-status" role="status" aria-live="polite"></p>
+</div>
+<script id="console-browser-strategy-bootstrap" type="application/json">{{ {"mode": editor_mode, "strategy_id": strategy_id}|tojson }}</script>
+{% endblock %}
+{% block scripts %}
+<script defer src="{{ url_for('static', filename='browser_strategy_editor_core.js') }}"></script>
+<script defer src="{{ url_for('static', filename='console_browser_strategy_editor.js') }}"></script>
+{% endblock %}

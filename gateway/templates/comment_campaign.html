@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="csrf-token" content="{{ csrf_token }}">
+  <title>评论 Campaign 工作台</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='dashboard_shell.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='comment_campaign.css') }}">
+  <script defer src="{{ url_for('static', filename='management_fetch.js') }}"></script>
+  <script defer src="{{ url_for('static', filename='comment_tree_editor.js') }}"></script>
+  <script defer src="{{ url_for('static', filename='comment_campaign.js') }}"></script>
+</head>
+<body class="comment-campaign-page">
+  <div class="dashboard-shell">
+    {% include '_dashboard_sidebar.html' %}
+    <main class="dashboard-main">
+      <div id="comment-campaign-app" class="campaign-shell">
+        <header class="campaign-header">
+          <div><p class="campaign-eyebrow">本地人工确认工作台</p><h1>评论 Campaign</h1><p class="campaign-muted">角色仅对当前视频的当前 Campaign 生效；下一个视频会重新分配。</p></div>
+          <div class="campaign-header-actions"><div id="comment-campaign-health" aria-label="服务状态" role="status"></div><button type="button" class="campaign-button primary" data-campaign-drawer="create">新建 Campaign</button></div>
+        </header>
+        <p id="comment-campaign-error" class="campaign-error" role="alert" aria-live="assertive"></p>
+        <nav class="campaign-filters" aria-label="Campaign 状态筛选">
+          <button type="button" data-campaign-filter="all" aria-pressed="true">全部</button><button type="button" data-campaign-filter="approval">等待审批</button><button type="button" data-campaign-filter="running">运行中</button><button type="button" data-campaign-filter="abnormal">异常</button><button type="button" data-campaign-filter="completed">已完成</button>
+        </nav>
+        <div class="campaign-workspace">
+          <section class="campaign-main" aria-labelledby="campaign-list-title">
+            <div class="campaign-section-heading"><div><h2 id="campaign-list-title">Campaign 列表</h2><p class="campaign-muted">计划预览显示冻结的视频、步骤、角色、已脱敏 Profile 与文案。</p></div><div><button type="button" class="campaign-button" data-campaign-drawer="template">模板</button><button type="button" class="campaign-button" data-campaign-drawer="profile">Profile 元数据</button><button type="button" class="campaign-button" data-campaign-drawer="settings">评论元素设置</button></div></div>
+            <div id="comment-campaign-list" class="campaign-list"></div><p id="comment-campaign-empty" class="campaign-muted">暂无 Campaign。</p>
+            <section class="campaign-plan" aria-labelledby="campaign-preview-title"><h2 id="campaign-preview-title">计划预览</h2><p>角色仅在本视频的当前 Campaign 内有效；重新分配不会复用上一视频的角色。</p><div class="campaign-actions-note"><button type="button" class="campaign-button" data-campaign-drawer="detail">查看分配、尝试与回执</button><button id="campaign-plan" type="button" class="campaign-button">生成计划</button><button id="campaign-reallocate" type="button" class="campaign-button">重新随机</button><button id="campaign-lock" type="button" class="campaign-button">锁定计划</button><button id="campaign-approve" type="button" class="campaign-button primary">批准 Campaign</button><button id="campaign-resume" type="button" class="campaign-button">继续</button><button id="campaign-cancel" type="button" class="campaign-button">取消</button></div><label class="campaign-pause-label">暂停原因<input id="campaign-pause-reason" maxlength="500"></label><button id="campaign-pause" type="button" class="campaign-button">暂停</button><ol id="comment-campaign-preview" class="campaign-preview"></ol></section>
+          </section>
+          <aside class="campaign-approval-panel" aria-labelledby="campaign-approval-title"><h2 id="campaign-approval-title">人工提交确认</h2><p>每次提交仅对当前 Assignment 修订版有效。</p><div id="comment-campaign-approvals"></div><p id="comment-campaign-approvals-empty" class="campaign-muted">当前没有待处理的提交确认。</p></aside>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <dialog id="campaign-drawer" class="campaign-drawer" aria-labelledby="campaign-drawer-title"><header><h2 id="campaign-drawer-title"></h2><button id="campaign-drawer-close" type="button" aria-label="关闭">×</button></header><div id="campaign-drawer-body"></div></dialog>
+</body>
+</html>

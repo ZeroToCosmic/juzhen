@@ -1,0 +1,104 @@
+<div class="console-settings-workspace" data-console-settings-workspace>
+  <nav class="console-settings-tabs" aria-label="设置分类">
+    <button class="console-settings-tab" type="button" data-settings-category="network" aria-current="page">代理与网络</button>
+    <button class="console-settings-tab" type="button" data-settings-category="browser">浏览器与 AdsPower</button>
+    <button class="console-settings-tab" type="button" data-settings-category="publishing">Buffer 与发布</button>
+    <button class="console-settings-tab" type="button" data-settings-category="r2">R2 存储</button>
+    <button class="console-settings-tab" type="button" data-settings-category="collection">数据采集</button>
+    <button class="console-settings-tab" type="button" data-settings-category="models">模型服务</button>
+  </nav>
+
+  <div class="console-settings-health" id="console-settings-health" role="status" aria-live="polite">正在检查配置状态…</div>
+
+  <form id="console-settings-form" class="console-settings-form" novalidate>
+    <section class="console-settings-panel" data-settings-panel="network">
+      <div class="console-section-head"><div><h2>代理与网络</h2><p>本机访问外部服务时使用的代理、IP 接口和请求超时。</p></div></div>
+      <div class="console-settings-grid">
+        <label>代理主机<input class="console-control" name="proxy.host" autocomplete="off"></label>
+        <label>代理端口<input class="console-control" name="proxy.port" type="number" min="1" step="1" autocomplete="off"></label>
+        <label>代理用户名<input class="console-control" name="proxy.username" autocomplete="off"></label>
+        <label>代理密码<input class="console-control" name="proxy.password" type="password" autocomplete="new-password"><small data-secret-status="proxy.password"></small></label>
+        <label>代理池协议<select class="console-control" name="proxy_pool.protocol"><option value="http">HTTP</option><option value="socks5">SOCKS5</option></select></label>
+        <label class="wide">代理池列表<textarea class="console-control console-settings-textarea" name="proxy_pool.raw" rows="5" autocomplete="off" placeholder="host:port:username:password，每行一个"></textarea><small data-secret-status="proxy_pool.raw"></small></label>
+        <label>IP 信息接口<input class="console-control" name="services.ipinfo_url" autocomplete="off"></label>
+        <label>IP 检测超时（秒）<input class="console-control" name="timeouts.ip_check_seconds" type="number" min="1" step="1"></label>
+      </div>
+      <div class="console-settings-subsection">
+        <div class="console-section-head"><div><h3>代理池状态</h3><p>仅展示主机、端口和用户名，不展示代理密码。</p></div><span class="console-status" id="console-settings-proxy-health" role="status"></span></div>
+        <div class="console-filter-row">
+          <label><span>搜索 IP / 端口 / 用户名</span><input class="console-control search" id="console-settings-proxy-search" type="search" placeholder="输入关键词"></label>
+          <label><span>每页数量</span><select class="console-control" id="console-settings-proxy-page-size"><option value="25">25</option><option value="50" selected>50</option><option value="100">100</option></select></label>
+          <button class="console-button" id="console-settings-proxy-refresh" type="button">刷新</button>
+        </div>
+        <div class="console-key-values console-settings-pool-stats"><div><span>总数</span><strong id="console-settings-proxy-total">—</strong></div><div><span>已分配</span><strong id="console-settings-proxy-assigned">—</strong></div><div><span>剩余</span><strong id="console-settings-proxy-remaining">—</strong></div></div>
+        <div class="console-table-wrap"><table class="console-settings-pool-table"><thead><tr><th>主机</th><th>端口</th><th>用户名</th><th>分配状态</th></tr></thead><tbody id="console-settings-proxy-body"></tbody></table></div>
+        <p class="console-empty" id="console-settings-proxy-empty" hidden>当前条件下没有代理。</p>
+        <div class="console-pagination"><span id="console-settings-proxy-meta">第 1 / 1 页</span><div><button class="console-link" id="console-settings-proxy-prev" type="button">上一页</button><button class="console-link" id="console-settings-proxy-next" type="button">下一页</button></div></div>
+      </div>
+    </section>
+
+    <section class="console-settings-panel" data-settings-panel="browser" hidden>
+      <div class="console-section-head"><div><h2>浏览器与 AdsPower</h2><p>浏览器执行的连接方式、默认页面和 AdsPower 接入配置。</p></div></div>
+      <div class="console-settings-grid">
+        <label class="wide">手动 CDP 地址<input class="console-control" name="browser.cdp_url" autocomplete="off" placeholder="ws://127.0.0.1:9222/devtools/browser/..."><small>使用 AdsPower 时留空。</small></label>
+        <label>任务目标<input class="console-control" name="browser.task_goal" autocomplete="off"></label>
+        <label>默认网址<input class="console-control" name="browser.default_url" autocomplete="off" placeholder="https://www.tiktok.com/"></label>
+        <label>AdsPower API 地址<input class="console-control" name="adspower.base_url" autocomplete="off" placeholder="http://local.adspower.net:50325"></label>
+        <label>默认分组 ID<input class="console-control" name="adspower.default_group_id" autocomplete="off"></label>
+        <label>AdsPower API Key<input class="console-control" name="adspower.api_key" type="password" autocomplete="new-password"><small data-secret-status="adspower.api_key"></small></label>
+      </div>
+    </section>
+
+    <section class="console-settings-panel" data-settings-panel="publishing" hidden>
+      <div class="console-section-head"><div><h2>Buffer 与发布</h2><p>Buffer 接口、发布队列和批量采样节奏。</p></div></div>
+      <div class="console-settings-grid">
+        <label>Buffer GraphQL 接口<input class="console-control" name="services.buffer_graphql_url" autocomplete="off"></label>
+        <label>Buffer 超时（秒）<input class="console-control" name="timeouts.buffer_publish_seconds" type="number" min="1" step="1"></label>
+        <label>发布队列间隔（秒）<input class="console-control" name="publish_queue.interval_seconds" type="number" min="1" step="1"></label>
+        <label>自动采样<select class="console-control" name="publish_sampling.enabled"><option value="true">启用</option><option value="false">停用</option></select></label>
+        <label>采样间隔（秒）<input class="console-control" name="publish_sampling.interval_seconds" type="number" min="30" step="1"></label>
+        <label>最小等待时间（小时）<input class="console-control" name="publish_sampling.min_age_hours" type="number" min="0" step="1"></label>
+      </div>
+    </section>
+
+    <section class="console-settings-panel" data-settings-panel="r2" hidden>
+      <div class="console-section-head"><div><h2>R2 存储</h2><p>视频素材存储、列表查询和公开访问地址配置。</p></div></div>
+      <div class="console-settings-grid">
+        <label>Account ID<input class="console-control" name="r2.account_id" autocomplete="off"></label>
+        <label>Bucket<input class="console-control" name="r2.bucket" autocomplete="off"></label>
+        <label class="wide">接口地址<input class="console-control" name="r2.endpoint_url" autocomplete="off"></label>
+        <label class="wide">公开访问域名<input class="console-control" name="r2.public_base_url" autocomplete="off"></label>
+        <label>文件前缀<input class="console-control" name="r2.prefix" autocomplete="off"></label>
+        <label>Account Token<input class="console-control" name="r2.account_token" type="password" autocomplete="new-password"><small data-secret-status="r2.account_token"></small></label>
+        <label>访问密钥 ID<input class="console-control" name="r2.access_key_id" autocomplete="off"><small data-secret-status="r2.access_key_id"></small></label>
+        <label>秘密访问密钥<input class="console-control" name="r2.secret_access_key" type="password" autocomplete="new-password"><small data-secret-status="r2.secret_access_key"></small></label>
+      </div>
+    </section>
+
+    <section class="console-settings-panel" data-settings-panel="collection" hidden>
+      <div class="console-section-head"><div><h2>数据采集</h2><p>TikTok 数据采集服务的 Cookie 凭据。Cookie 只用于保存和验证，不在页面回显。</p></div></div>
+      <div class="console-settings-cookie-card">
+        <div><span class="console-settings-label">当前状态</span><strong id="console-settings-cookie-status">未配置</strong></div>
+        <div><span class="console-settings-label">最近验证</span><strong id="console-settings-cookie-valid">未验证</strong></div>
+      </div>
+      <div class="console-settings-cookie-form">
+        <label class="wide">TikTok Cookie<input class="console-control" id="console-settings-cookie" type="password" autocomplete="new-password" placeholder="留空不修改"></label>
+        <div class="console-settings-inline-actions"><button class="console-button" id="console-settings-cookie-validate" type="button">验证 Cookie</button><button class="console-button" id="console-settings-cookie-save" type="button">保存 Cookie</button></div>
+      </div>
+    </section>
+
+    <section class="console-settings-panel" data-settings-panel="models" hidden>
+      <div class="console-section-head"><div><h2>模型服务</h2><p>管理所有模型配置，并指定默认模型。API Key 留空表示保持原值。</p></div><button class="console-button" id="console-settings-presets-refresh" type="button">刷新模型预设</button></div>
+      <div class="console-settings-grid console-settings-model-default-row"><label>默认模型 ID<input class="console-control" id="console-settings-model-default" name="models.default_model_id" autocomplete="off"></label><div class="console-settings-preset-note" id="console-settings-presets" role="status"></div></div>
+      <div class="console-settings-models" id="console-settings-models" data-models-list></div>
+      <p class="console-empty" id="console-settings-models-empty" hidden>暂无模型配置。</p>
+    </section>
+  </form>
+
+  <div class="console-settings-savebar" role="region" aria-label="设置操作">
+    <div class="console-settings-savebar-message"><span id="console-settings-dirty">未修改</span><span class="console-status" id="console-settings-status" role="status"></span><span class="console-status error" id="console-settings-error" role="alert"></span></div>
+    <button class="console-button" id="console-settings-refresh" type="button">重新加载</button>
+    <button class="console-button" id="console-settings-restore" type="button">恢复最近备份</button>
+    <button class="console-button primary" id="console-settings-save" type="submit" form="console-settings-form">保存设置</button>
+  </div>
+</div>

@@ -1,0 +1,16 @@
+{% extends 'console_base.html' %}
+{% block title %}页面元素 · Agent 自动化主控台{% endblock %}
+{% block styles %}<link rel="stylesheet" href="{{ url_for('static', filename='page_elements.css') }}">{% endblock %}
+{% block content %}
+<div id="console-page-elements" class="console-page">
+  <header class="console-page-head">
+    <div><h1>页面元素</h1><p>通过页面点选器维护可复用的页面定位定义。</p></div>
+    <p id="page-elements-status" class="console-status" role="status" aria-live="polite">正在读取元素库…</p>
+  </header>
+  {% with console_mode=true %}{% include '_page_elements_workspace.html' %}{% endwith %}
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='page_elements_controller.js') }}"></script>
+<script src="{{ url_for('static', filename='console_page_elements.js') }}"></script>
+{% endblock %}

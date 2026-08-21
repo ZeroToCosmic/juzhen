@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:juzhen:remote-actions:progress-event:v1",
+  "title": "Remote action progress event v1",
+  "type": "object",
+  "properties": {
+    "event_id": {"type": "string", "pattern": "^evt_[A-Za-z0-9_-]{1,76}$", "maxLength": 80},
+    "work_order_id": {"type": "string", "pattern": "^wo_[A-Za-z0-9_-]{1,77}$", "maxLength": 80},
+    "lease_generation": {"type": "integer", "minimum": 1, "maximum": 9223372036854775807},
+    "run_id": {"type": "string", "pattern": "^run_[A-Za-z0-9_-]{1,76}$", "maxLength": 80},
+    "status": {
+      "enum": ["RUNNING", "VERIFYING", "RECONCILING", "CHECKPOINT_BLOCKED"]
+    },
+    "stage": {"type": "string", "minLength": 1, "maxLength": 128},
+    "occurred_at": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$",
+      "maxLength": 24
+    },
+    "summary": {
+      "type": "object",
+      "maxProperties": 32,
+      "additionalProperties": {
+        "oneOf": [
+          {"type": "string", "maxLength": 4096},
+          {"type": "number"},
+          {"type": "boolean"},
+          {"type": "null"}
+        ]
+      }
+    }
+  },
+  "required": [
+    "event_id",
+    "work_order_id",
+    "lease_generation",
+    "run_id",
+    "status",
+    "stage",
+    "occurred_at",
+    "summary"
+  ],
+  "additionalProperties": false
+}

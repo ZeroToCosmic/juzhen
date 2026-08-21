@@ -1,0 +1,33 @@
+{% extends 'console_base.html' %}
+{% block title %}账号与窗口 · Agent 自动化主控台{% endblock %}
+{% block content %}
+<div id="console-accounts-windows" class="console-page">
+  <header class="console-page-head">
+    <div><h1>账号与窗口</h1><p>维护发布账号、代理关系和本机 AdsPower 窗口</p></div>
+    <div class="console-actions"><button class="console-button" id="accounts-windows-refresh" type="button">刷新</button><button class="console-button primary" id="account-create-open" type="button">添加账号</button></div>
+  </header>
+  <section class="console-stat-grid" aria-label="账号与窗口概览">
+    <article class="console-stat"><span>Buffer 账号</span><strong id="accounts-count">—</strong><small id="accounts-available-note">正在读取</small></article>
+    <article class="console-stat"><span>TikTok Profile</span><strong id="accounts-profile-count">—</strong><small>已同步绑定</small></article>
+    <article class="console-stat"><span>AdsPower 窗口</span><strong id="windows-count">—</strong><small id="windows-status-note">正在读取</small></article>
+    <article class="console-stat"><span>代理池可用</span><strong id="proxy-remaining">—</strong><small id="proxy-total-note">正在读取</small></article>
+  </section>
+  <section class="console-section">
+    <div class="console-section-head"><div><h2>账号花名册</h2><p>Buffer 凭据由后端脱敏；同步后用于发布和采集</p></div><div class="console-actions"><button class="console-button" id="accounts-sync-selected" type="button">同步选中</button><button class="console-button" id="accounts-sync-all" type="button">同步全部</button></div></div>
+    <form class="console-filter-row" id="accounts-filter"><label><span>搜索</span><input class="console-control search" name="query" type="search" placeholder="账号名、Profile 或同步状态"></label></form>
+    <div class="console-table-wrap"><table class="console-dense-table"><thead><tr><th><input id="accounts-select-all" type="checkbox" aria-label="全选账号"></th><th>账号</th><th>TikTok Profile</th><th>代理</th><th>同步状态</th><th>最近同步</th><th class="action">操作</th></tr></thead><tbody id="accounts-roster-body"></tbody></table></div>
+    <p class="console-empty" id="accounts-roster-empty" hidden>暂无账号。</p>
+  </section>
+  <section class="console-section">
+    <div class="console-section-head"><div><h2>浏览器窗口</h2><p>选择 Profile 后在本机打开并自动排列窗口</p></div><div class="console-actions"><button class="console-button" id="windows-refresh" type="button">读取窗口</button><button class="console-button primary" id="windows-open-tile" type="button">打开选中窗口</button></div></div>
+    <div class="console-table-wrap"><table><thead><tr><th><input id="windows-select-all" type="checkbox" aria-label="全选窗口"></th><th>窗口编号</th><th>Profile ID</th><th>名称</th><th>分组</th><th>账号</th></tr></thead><tbody id="windows-body"></tbody></table></div>
+    <p class="console-empty" id="windows-empty" hidden>没有读取到 AdsPower 窗口。</p>
+    <div class="console-pagination"><span id="windows-page-meta">第 1 / 1 页</span><div><button class="console-link" id="windows-prev" type="button">上一页</button><button class="console-link" id="windows-next" type="button">下一页</button></div></div>
+  </section>
+  <p class="console-status" id="accounts-windows-status" role="status"></p>
+
+  <dialog class="console-dialog" id="account-dialog"><form id="account-form"><div class="console-dialog-head"><div><span>账号资源</span><h2 id="account-dialog-title">添加 Buffer 账号</h2></div><button class="console-icon-button" data-close="account-dialog" type="button" aria-label="关闭">×</button></div><input name="id" type="hidden"><div class="console-form-grid"><label class="wide">账号名称<input class="console-control" name="account_name" required autocomplete="off"></label><label>Buffer Token<input class="console-control" name="buffer_token" type="password" autocomplete="new-password" placeholder="编辑时留空表示不修改"></label><label>Buffer API<input class="console-control" name="buffer_api" type="url" autocomplete="off" placeholder="https://api.buffer.com"></label></div><p class="console-status" data-dialog-status></p><div class="console-dialog-actions"><button class="console-button" data-close="account-dialog" type="button">取消</button><button class="console-button primary" type="submit">保存账号</button></div></form></dialog>
+  <dialog class="console-dialog" id="proxy-dialog"><form id="proxy-form"><div class="console-dialog-head"><div><span>账号代理</span><h2 id="proxy-dialog-title">分配代理</h2></div><button class="console-icon-button" data-close="proxy-dialog" type="button" aria-label="关闭">×</button></div><input name="account_id" type="hidden"><div class="console-form-grid"><label>分配方式<select class="console-control" name="mode"><option value="auto">从代理池自动分配</option><option value="manual">手动指定</option></select></label><label>手动代理<input class="console-control" name="proxy" type="password" autocomplete="new-password" placeholder="host:port:user:password"></label></div><p class="console-status" data-dialog-status></p><div class="console-dialog-actions"><button class="console-button" data-close="proxy-dialog" type="button">取消</button><button class="console-button primary" type="submit">保存代理</button></div></form></dialog>
+</div>
+{% endblock %}
+{% block scripts %}<script src="{{ url_for('static', filename='console_accounts_windows.js') }}"></script>{% endblock %}

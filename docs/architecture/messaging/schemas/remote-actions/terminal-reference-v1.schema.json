@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:juzhen:remote-actions:terminal-reference:v1",
+  "title": "Remote action terminal reference v1",
+  "type": "object",
+  "properties": {
+    "work_order_id": {"type": "string", "pattern": "^wo_[A-Za-z0-9_-]{1,77}$", "maxLength": 80},
+    "lease_generation": {"type": "integer", "minimum": 1, "maximum": 9223372036854775807},
+    "status": {
+      "enum": ["SUCCEEDED", "PARTIALLY_SUCCEEDED", "FAILED", "CANCELLED", "UNVERIFIED"]
+    },
+    "result_event_id": {"type": "string", "pattern": "^evt_[A-Za-z0-9_-]{1,76}$", "maxLength": 80}
+  },
+  "required": ["work_order_id", "lease_generation", "status", "result_event_id"],
+  "additionalProperties": false
+}

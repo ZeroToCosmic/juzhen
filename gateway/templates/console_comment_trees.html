@@ -1,0 +1,93 @@
+{% extends 'console_base.html' %}
+{% block title %}评论树管理 · 动作库{% endblock %}
+{% block styles %}
+<link rel="stylesheet" href="{{ url_for('static', filename='console_comment_trees.css') }}">
+{% endblock %}
+{% block content %}
+<div id="console-comment-trees" class="console-page comment-trees-page" data-view="list">
+  <a class="console-back-button" href="{{ url_for('console.actions') }}">← 返回动作库</a>
+  <header class="console-page-head comment-trees-page-head">
+    <div>
+      <h1>评论树管理</h1>
+      <p>维护可供评论 Campaign 使用的评论树，支持手工编辑和 Excel 批量导入。</p>
+    </div>
+    <div class="console-actions comment-trees-page-actions">
+      <button id="comment-trees-refresh" class="console-button" type="button">刷新</button>
+      <button id="comment-trees-create" class="console-button" type="button">新建评论树</button>
+      <button id="comment-trees-import" class="console-button primary" type="button">Excel 导入</button>
+    </div>
+  </header>
+
+  <section id="comment-tree-list-workspace" class="comment-trees-workspace" data-workspace="list" aria-labelledby="comment-tree-list-title">
+    <div class="console-section">
+      <div class="console-section-head comment-trees-section-head">
+        <div>
+          <h2 id="comment-tree-list-title">评论树列表</h2>
+          <p>启用中的评论树可编辑或停用，停用记录可重新启用或删除。</p>
+        </div>
+      </div>
+      <form id="comment-tree-filters" class="console-filter-row comment-trees-filter-row">
+        <label><span>搜索</span><input id="comment-tree-search" class="console-control search" name="query" type="search" placeholder="搜索评论树名称"></label>
+        <label><span>模式</span><select id="comment-tree-mode-filter" class="console-control" name="mode"><option value="all">全部模式</option><option value="independent">独立评论</option><option value="threaded">盖楼回复</option></select></label>
+        <label><span>状态</span><select id="comment-tree-status-filter" class="console-control" name="status"><option value="all">全部状态</option><option value="enabled">启用</option><option value="disabled">停用</option></select></label>
+        <button id="comment-tree-filter-reset" class="console-button" type="button">重置</button>
+      </form>
+    </div>
+
+    <section class="console-section comment-trees-group" aria-labelledby="comment-tree-enabled-title">
+      <div class="console-section-head comment-trees-section-head">
+        <h2 id="comment-tree-enabled-title">启用中的评论树</h2>
+      </div>
+      <div class="console-table-wrap comment-trees-table-wrap">
+        <table class="console-dense-table comment-trees-table">
+          <thead><tr><th>评论树</th><th>支持模式</th><th>状态</th><th>版本</th><th>最近更新</th><th class="action">操作</th></tr></thead>
+          <tbody id="comment-tree-enabled-body"></tbody>
+        </table>
+      </div>
+      <p id="comment-tree-enabled-empty" class="console-empty" hidden>暂无启用中的评论树。</p>
+    </section>
+
+    <details id="comment-tree-disabled-group" class="console-section comment-trees-group">
+      <summary class="comment-trees-collapsible-title"><span id="comment-tree-disabled-title">已停用的评论树</span><span class="comment-trees-summary-note">默认收起</span></summary>
+      <div class="console-table-wrap comment-trees-table-wrap">
+        <table class="console-dense-table comment-trees-table">
+          <thead><tr><th>评论树</th><th>支持模式</th><th>状态</th><th>版本</th><th>最近更新</th><th class="action">操作</th></tr></thead>
+          <tbody id="comment-tree-disabled-body"></tbody>
+        </table>
+      </div>
+      <p id="comment-tree-disabled-empty" class="console-empty" hidden>暂无已停用的评论树。</p>
+    </details>
+  </section>
+
+  <section id="comment-tree-editor-workspace" class="comment-trees-workspace" data-workspace="editor" aria-labelledby="comment-tree-editor-title" hidden>
+    <div class="console-section">
+      <div class="console-section-head comment-trees-section-head">
+        <div><h2 id="comment-tree-editor-title">编辑评论树</h2><p>填写评论文案并在预览中确认回复结构。</p></div>
+        <button id="comment-tree-editor-back" class="console-button" type="button">返回列表</button>
+      </div>
+      <div id="comment-tree-editor-host" class="comment-trees-editor-host"></div>
+    </div>
+  </section>
+
+  <section id="comment-tree-import-workspace" class="comment-trees-workspace" data-workspace="import" aria-labelledby="comment-tree-import-title" hidden>
+    <div class="console-section">
+      <div class="console-section-head comment-trees-section-head">
+        <div><h2 id="comment-tree-import-title">Excel 导入</h2><p>上传 .xlsx 文件，预览并选择有效评论树后提交。</p></div>
+        <button id="comment-tree-import-back" class="console-button" type="button">返回列表</button>
+      </div>
+      <div class="comment-trees-import-controls">
+        <label><span>Excel 文件</span><input id="comment-tree-import-file" class="console-control" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"></label>
+        <button id="comment-tree-import-preview" class="console-button" type="button">预览导入</button>
+      </div>
+      <div id="comment-tree-import-preview-list" class="comment-trees-import-preview" aria-live="polite"></div>
+      <button id="comment-tree-import-commit" class="console-button primary" type="button" disabled>导入已选评论树</button>
+    </div>
+  </section>
+
+  <p id="comment-trees-status" class="console-status" role="status" aria-live="polite">正在加载评论树…</p>
+</div>
+{% endblock %}
+{% block scripts %}
+<script defer src="{{ url_for('static', filename='comment_tree_editor.js') }}"></script>
+<script defer src="{{ url_for('static', filename='console_comment_trees.js') }}"></script>
+{% endblock %}

@@ -1,0 +1,29 @@
+{% extends 'console_base.html' %}
+{% block title %}数据采集 · Agent 自动化主控台{% endblock %}
+{% block content %}
+<div id="console-collection" class="console-page">
+  <header class="console-page-head">
+    <div><h1>数据采集</h1><p>管理本机采集对象、服务状态和运行记录</p></div>
+    <div class="console-actions"><button class="console-button" id="collection-refresh" type="button">刷新</button><button class="console-button primary" id="collection-run-incremental" type="button">调试采集</button></div>
+  </header>
+  <section class="console-stat-grid" aria-label="采集状态">
+    <article class="console-stat"><span>采集账号</span><strong id="collection-account-count">—</strong><small id="collection-account-note">正在读取</small></article>
+    <article class="console-stat"><span>抓取服务</span><strong id="collection-scraper">—</strong><small>本机采集器</small></article>
+    <article class="console-stat"><span>定时任务</span><strong id="collection-worker">—</strong><small>本机调度服务</small></article>
+    <article class="console-stat"><span>最近运行</span><strong id="collection-last-run">—</strong><small id="collection-last-run-note">暂无记录</small></article>
+  </section>
+  <section class="console-section">
+    <div class="console-section-head"><div><h2>采集对象</h2><p>正式任务由中控下发，本页保留本机调试入口</p></div><a class="console-link" href="/tiktok-stats">管理采集账号</a></div>
+    <div class="console-table-wrap"><table><thead><tr><th>账号</th><th>来源</th><th>状态</th><th>更新时间</th></tr></thead><tbody id="collection-accounts-body"></tbody></table></div>
+    <p class="console-empty" id="collection-accounts-empty" hidden>暂无采集账号。</p>
+  </section>
+  <section class="console-section">
+    <div class="console-section-head"><div><h2>最近运行</h2><p>按开始时间倒序</p></div><button class="console-button" id="collection-run-full" type="button">完整校准</button></div>
+    <div class="console-table-wrap"><table><thead><tr><th>开始时间</th><th>类型</th><th>状态</th><th>完成时间</th></tr></thead><tbody id="collection-runs-body"></tbody></table></div>
+    <p class="console-empty" id="collection-runs-empty" hidden>暂无采集运行记录。</p>
+  </section>
+  <p class="console-status" id="collection-status" role="status"></p>
+</div>
+{% endblock %}
+{% block scripts %}<script src="{{ url_for('static', filename='console_collection.js') }}"></script>{% endblock %}
+

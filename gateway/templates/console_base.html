@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="csrf-token" content="{{ csrf_token }}">
+  <title>{% block title %}Agent 自动化主控台{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='dashboard_shell.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='console.css') }}">
+  {% block styles %}{% endblock %}
+  <script src="{{ url_for('static', filename='management_fetch.js') }}"></script>
+</head>
+<body class="console-body">
+  <div class="dashboard-shell console-shell">
+    {% include '_dashboard_sidebar.html' %}
+    <main class="dashboard-main console-main">
+      {% block content %}{% endblock %}
+    </main>
+  </div>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

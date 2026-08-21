@@ -1,0 +1,3054 @@
+{
+  "vectors": [
+    {
+      "name": "vector-01",
+      "content_input": {
+        "executor_kind": "browser_strategy",
+        "definition_schema_version": "1.0",
+        "parameter_schema": {
+          "type": "object",
+          "properties": {
+            "target_url": {
+              "type": "string",
+              "maxLength": 2048
+            },
+            "input_text": {
+              "type": "string",
+              "maxLength": 4096
+            }
+          },
+          "additionalProperties": false
+        },
+        "result_schema": {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "ok"
+          ],
+          "additionalProperties": false
+        },
+        "snapshot": {
+          "index": 0,
+          "label": "plain",
+          "numeric": 0,
+          "nested": {
+            "z": [
+              0,
+              true,
+              null
+            ],
+            "a": {
+              "β": "beta",
+              "𐀀": "astral",
+              "€": "euro"
+            }
+          }
+        },
+        "execution_defaults": {
+          "navigation_timeout_seconds": 10,
+          "retry": 0
+        }
+      },
+      "content_checksum": "sha256:379a703c6dfb9d14e3265e6228a584ccfed314d1633bfa6fbb9802d07efc7825",
+      "release_input": {
+        "action_id": "act_00000000000000000000000001",
+        "revision": 1,
+        "content_checksum": "sha256:379a703c6dfb9d14e3265e6228a584ccfed314d1633bfa6fbb9802d07efc7825"
+      },
+      "release_checksum": "sha256:3c32e36cbdd363dbc0e40e396724d512bd1975177d1e261d98e4613d65a7bdf7"
+    },
+    {
+      "name": "vector-02",
+      "content_input": {
+        "executor_kind": "comment_campaign",
+        "definition_schema_version": "1.0",
+        "parameter_schema": {
+          "type": "object",
+          "properties": {
+            "target_url": {
+              "type": "string",
+              "maxLength": 2048
+            },
+            "input_text": {
+              "type": "string",
+              "maxLength": 4096
+            }
+          },
+          "additionalProperties": false
+        },
+        "result_schema": {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "ok"
+          ],
+          "additionalProperties": false
+        },
+        "snapshot": {
+          "nested": {
+            "z": [
+              1,
+              true,
+              null
+            ],
+            "a": {
+              "β": "beta",
+              "𐀀": "astral",
+              "€": "euro"
+            }
+          },
+          "numeric": -0.0,
+          "label": "中文",
+          "index": 1
+        },
+        "execution_defaults": {
+          "navigation_timeout_seconds": 11,
+          "retry": 1
+        }
+      },
+      "content_checksum": "sha256:74c3b44ff7082604c815302631d044bd3ec13a9f0b4e96db922fb07771e98874",
+      "release_input": {
+        "action_id": "act_00000000000000000000000002",
+        "revision": 2,
+        "content_checksum": "sha256:74c3b44ff7082604c815302631d044bd3ec13a9f0b4e96db922fb07771e98874"
+      },
+      "release_checksum": "sha256:a2f1228d1ac0a8e4fc0913aaa9ad3854628ce8d61c7a197e6b14bf68d14d5cda"
+    },
+    {
+      "name": "vector-03",
+      "content_input": {
+        "executor_kind": "browser_strategy",
+        "definition_schema_version": "1.0",
+        "parameter_schema": {
+          "type": "object",
+          "properties": {
+            "target_url": {
+              "type": "string",
+              "maxLength": 2048
+            },
+            "input_text": {
+              "type": "string",
+              "maxLength": 4096
+            }
+          },
+          "additionalProperties": false
+        },
+        "result_schema": {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "ok"
+          ],
+          "additionalProperties": false
+        },
+        "snapshot": {
+          "index": 2,
+          "label": "emoji-🚀",
+          "numeric": 1,
+          "nested": {
+            "z": [
+              2,
+              true,
+              null
+            ],
+            "a": {
+              "β": "beta",
+              "𐀀": "astral",
+              "€": "euro"
+            }
+          }
+        },
+        "execution_defaults": {
+          "navigation_timeout_seconds": 12,
+          "retry": 2
+        }
+      },
+      "content_checksum": "sha256:70cd1a9bf91fa0d13e0652c577bca88749474ac0fd8334f4c45524b091e3d971",
+      "release_input": {
+        "action_id": "act_00000000000000000000000003",
+        "revision": 3,
+        "content_checksum": "sha256:70cd1a9bf91fa0d13e0652c577bca88749474ac0fd8334f4c45524b091e3d971"
+      },
+      "release_checksum": "sha256:1f9b3292319e9b6d064f685ebf85e4f3c084d3e6c065976146283b765570855c"
+    },
+    {
+      "name": "vector-04",
+      "content_input": {
+        "executor_kind": "comment_campaign",
+        "definition_schema_version": "1.0",
+        "parameter_schema": {
+          "type": "object",
+          "properties": {
+            "target_url": {
+              "type": "string",
+              "maxLength": 2048
+            },
+            "input_text": {
+              "type": "string",
+              "maxLength": 4096
+            }
+          },
+          "additionalProperties": false
+        },
+        "result_schema": {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "ok"
+          ],
+          "additionalProperties": false
+        },
+        "snapshot": {
+          "nested": {
+            "z": [
+              3,
+              true,
+              null
+            ],
+            "a": {
+              "β": "beta",
+              "𐀀": "astral",
+              "€": "euro"
+            }
+          },
+          "numeric": -7,
+          "label": "line\nbreak",
+          "index": 3
+        },
+        "execution_defaults": {
+          "navigation_timeout_seconds": 13,
+          "retry": 0
+        }
+      },
+      "content_checksum": "sha256:b8ad07885a5f0c2a37be31ce20d0f2e676c730e8bebdb5201f3f0af60618ba5c",
+      "release_input": {
+        "action_id": "act_00000000000000000000000004",
+        "revision": 4,
+        "content_checksum": "sha256:b8ad07885a5f0c2a37be31ce20d0f2e676c730e8bebdb5201f3f0af60618ba5c"
+      },
+      "release_checksum": "sha256:afb211a2120c0ec85c8a4e56ac004afe36859a1b4b7872dc38068a21f12794d2"
+    },
+    {
+      "name": "vector-05",
+      "content_input": {
+        "executor_kind": "browser_strategy",
+        "definition_schema_version": "1.0",
+        "parameter_schema": {
+          "type": "object",
+          "properties": {
+            "target_url": {
+              "type": "string",
+              "maxLength": 2048
+            },
+            "input_text": {
+              "type": "string",
+              "maxLength": 4096
+            }
+          },
+          "additionalProperties": false
+        },
+        "result_schema": {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "ok"
+          ],
+          "additionalProperties": false
+        },
+        "snapshot": {
+          "index": 4,
+          "label": "quote-\"",
+          "numeric": 1.5,
+          "nested": {
+            "z": [
+              4,
+              true,
+              null
+            ],
+            "a": {
+              "β": "beta",
+              "𐀀": "astral",
+              "€": "euro"
+            }
+          }
+        },
+        "execution_defaults": {
+          "navigation_timeout_seconds": 14,
+          "retry": 1
+        }
+      },
+      "content_checksum": "sha256:658b2effe8bdfd47f7aa90ec921ef9eb12a9a35638d27d7c1bafaefea6c3bf27",
+      "release_input": {
+        "action_id": "act_00000000000000000000000005",
+        "revision": 5,
+        "content_checksum": "sha256:658b2effe8bdfd47f7aa90ec921ef9eb12a9a35638d27d7c1bafaefea6c3bf27"
+      },
+      "release_checksum": "sha256:83ff680a24d478671c12a0fa981bc225924a5e84a7572d48d106e4c29a39b972"
+    },
+    {
+      "name": "vector-06",
+      "content_input": {
+        "executor_kind": "comment_campaign",
+        "definition_schema_version": "1.0",
+        "parameter_schema": {
+          "type": "object",
+          "properties": {
+            "target_url": {
+              "type": "string",
+              "maxLength": 2048
+            },
+            "input_text": {
+              "type": "string",
+              "maxLength": 4096
+            }
+          },
+          "additionalProperties": false
+        },
+        "result_schema": {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "ok"
+          ],
+          "additionalProperties": false
+        },
+        "snapshot": {
+          "nested": {
+            "z": [
+              5,
+              true,
+              null
+            ],
+            "a": {
+              "β": "beta",
+              "𐀀": "astral",
+              "€": "euro"
+            }
+          },
+          "numeric": 1e-06,
+          "label": "plain",
+          "index": 5
+        },
+        "execution_defaults": {
+          "navigation_timeout_seconds": 15,
+          "retry": 2
+        }
+      },
+      "content_checksum": "sha256:19e33be1f5ed3a48972f85c5e9dd4ec4fb0eaf9d5a17aff1506b432e1a7601fe",
+      "release_input": {
+        "action_id": "act_00000000000000000000000006",
+        "revision": 6,
+        "content_checksum": "sha256:19e33be1f5ed3a48972f85c5e9dd4ec4fb0eaf9d5a17aff1506b432e1a7601fe"
+      },
+      "release_checksum": "sha256:e3305126bde4731c31acdcad026199b0c202f5378bc40c55adcf55e38914857d"
+    },
+    {
+      "name": "vector-07",
+      "content_input": {
+        "executor_kind": "browser_strategy",
+        "definition_schema_version": "1.0",
+        "parameter_schema": {
+          "type": "object",
+          "properties": {
+            "target_url": {
+              "type": "string",
+              "maxLength": 2048
+            },
+            "input_text": {
+              "type": "string",
+              "maxLength": 4096
+            }
+          },
+          "additionalProperties": false
+        },
+        "result_schema": {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "ok"
+          ],
+          "additionalProperties": false
+        },
+        "snapshot": {
+          "index": 6,
+          "label": "中文",
+          "numeric": 1e-07,
+          "nested": {
+            "z": [
+              6,
+              true,
+              null
+            ],
+            "a": {
+              "β": "beta",
+              "𐀀": "astral",
+              "€": "euro"
+            }
+          }
+        },
+        "execution_defaults": {
+          "navigation_timeout_seconds": 16,
+          "retry": 0
+        }
+      },
+      "content_checksum": "sha256:83195553970bbfb172a27aed965067f55b2382b350a4b0ee53b18bd45b259aa1",
+      "release_input": {
+        "action_id": "act_00000000000000000000000007",
+        "revision": 7,
+        "content_checksum": "sha256:83195553970bbfb172a27aed965067f55b2382b350a4b0ee53b18bd45b259aa1"
+      },
+      "release_checksum": "sha256:ef9a3b33f002f7fa0de8b6f018ff4703f4ae8c7581970b285c682feae94a643c"
+    },
+    {
+      "name": "vector-08",
+      "content_input": {
+        "executor_kind": "comment_campaign",
+        "definition_schema_version": "1.0",
+        "parameter_schema": {
+          "type": "object",
+          "properties": {
+            "target_url": {
+              "type": "string",
+              "maxLength": 2048
+            },
+            "input_text": {
+              "type": "string",
+              "maxLength": 4096
+            }
+          },
+          "additionalProperties": false
+        },
+        "result_schema": {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "ok"
+          ],
+          "additionalProperties": false
+        },
+        "snapshot": {
+          "nested": {
+            "z": [
+              7,
+              true,
+              null
+            ],
+            "a": {
+              "β": "beta",
+              "𐀀": "astral",
+              "€": "euro"
+            }
+          },
+          "numeric": 1e-20,
+          "label": "emoji-🚀",
+          "index": 7
+        },
+        "execution_defaults": {
+          "navigation_timeout_seconds": 17,
+          "retry": 1
+        }
+      },
+      "content_checksum": "sha256:92b210c524796fad93dd26f2433a3484746c5f54bf44bacb2ea97b4b90583b4b",
+      "release_input": {
+        "action_id": "act_00000000000000000000000008",
+        "revision": 8,
+        "content_checksum": "sha256:92b210c524796fad93dd26f2433a3484746c5f54bf44bacb2ea97b4b90583b4b"
+      },
+      "release_checksum": "sha256:877fb66164894b134bf16310809b67cb8e1c48453629d04fb75d0b0b992f5646"
+    },
+    {
+      "name": "vector-09",
+      "content_input": {
+        "executor_kind": "browser_strategy",
+        "definition_schema_version": "1.0",
+        "parameter_schema": {
+          "type": "object",
+          "properties": {
+            "target_url": {
+              "type": "string",
+              "maxLength": 2048
+            },
+            "input_text": {
+              "type": "string",
+              "maxLength": 4096
+            }
+          },
+          "additionalProperties": false
+        },
+        "result_schema": {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "ok"
+          ],
+          "additionalProperties": false
+        },
+        "snapshot": {
+          "index": 8,
+          "label": "line\nbreak",
+          "numeric": 1e-21,
+          "nested": {
+            "z": [
+              8,
+              true,
+              null
+            ],
+            "a": {
+              "β": "beta",
+              "𐀀": "astral",
+              "€": "euro"
+            }
+          }
+        },
+        "execution_defaults": {
+          "navigation_timeout_seconds": 18,
+          "retry": 2
+        }
+      },
+      "content_checksum": "sha256:410e95c97b2db4eb81056cafc8e946746a478c04454ea68aac98c921dcc03a63",
+      "release_input": {
+        "action_id": "act_00000000000000000000000009",
+        "revision": 9,
+        "content_checksum": "sha256:410e95c97b2db4eb81056cafc8e946746a478c04454ea68aac98c921dcc03a63"
+      },
+      "release_checksum": "sha256:8fd95d848d8819d766b3ae76ac7d02cd83278ab75b637260a99d99c7f58c946c"
+    },
+    {
+      "name": "vector-10",
+      "content_input": {
+        "executor_kind": "comment_campaign",
+        "definition_schema_version": "1.0",
+        "parameter_schema": {
+          "type": "object",
+          "properties": {
+            "target_url": {
+              "type": "string",
+              "maxLength": 2048
+            },
+            "input_text": {
+              "type": "string",
+              "maxLength": 4096
+            }
+          },
+          "additionalProperties": false
+        },
+        "result_schema": {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "ok"
+          ],
+          "additionalProperties": false
+        },
+        "snapshot": {
+          "nested": {
+            "z": [
+              9,
+              true,
+              null
+            ],
+            "a": {
+              "β": "beta",
+              "𐀀": "astral",
+              "€": "euro"
+            }
+          },
+          "numeric": 333333333.3333333,
+          "label": "quote-\"",
+          "index": 9
+        },
+        "execution_defaults": {
+          "navigation_timeout_seconds": 19,
+          "retry": 0
+        }
+      },
+      "content_checksum": "sha256:3eb823e6c99e798783f2bdb0fe1c04bb3d41a9421c64eaf76e6611fec204e154",
+      "release_input": {
+        "action_id": "act_0000000000000000000000000A",
+        "revision": 10,
+        "content_checksum": "sha256:3eb823e6c99e798783f2bdb0fe1c04bb3d41a9421c64eaf76e6611fec204e154"
+      },
+      "release_checksum": "sha256:edd6266d292a9cf0d212c10651a6a9f5e1c5fe59b9af08f9643f44bc13de5a71"
+    },
+    {
+      "name": "vector-11",
+      "content_input": {
+        "executor_kind": "browser_strategy",
+        "definition_schema_version": "1.0",
+        "parameter_schema": {
+          "type": "object",
+          "properties": {
+            "target_url": {
+              "type": "string",
+              "maxLength": 2048
+            },
+            "input_text": {
+              "type": "string",
+              "maxLength": 4096
+            }
+          },
+          "additionalProperties": false
+        },
+        "result_schema": {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "ok"
+          ],
+          "additionalProperties": false
+        },
+        "snapshot": {
+          "index": 10,
+          "label": "plain",
+          "numeric": 0,
+          "nested": {
+            "z": [
+              10,
+              true,
+              null
+            ],
+            "a": {
+              "β": "beta",
+              "𐀀": "astral",
+              "€": "euro"
+            }
+          }
+        },
+        "execution_defaults": {
+          "navigation_timeout_seconds": 20,
+          "retry": 1
+        }
+      },
+      "content_checksum": "sha256:f71edf9603bd54381fe91596accba4a30e83a9ef34c416dd9be92b7f31ef5106",
+      "release_input": {
+        "action_id": "act_0000000000000000000000000B",
+        "revision": 11,
+        "content_checksum": "sha256:f71edf9603bd54381fe91596accba4a30e83a9ef34c416dd9be92b7f31ef5106"
+      },
+      "release_checksum": "sha256:3f8bfd3906aa1d4736b8f957654bb7d5e86a27754408627dd5be0af13fdf80b8"
+    },
+    {
+      "name": "vector-12",
+      "content_input": {
+        "executor_kind": "comment_campaign",
+        "definition_schema_version": "1.0",
+        "parameter_schema": {
+          "type": "object",
+          "properties": {
+            "target_url": {
+              "type": "string",
+              "maxLength": 2048
+            },
+            "input_text": {
+              "type": "string",
+              "maxLength": 4096
+            }
+          },
+          "additionalProperties": false
+        },
+        "result_schema": {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "ok"
+          ],
+          "additionalProperties": false
+        },
+        "snapshot": {
+          "nested": {
+            "z": [
+              11,
+              true,
+              null
+            ],
+            "a": {
+              "β": "beta",
+              "𐀀": "astral",
+              "€": "euro"
+            }
+          },
+          "numeric": -0.0,
+          "label": "中文",
+          "index": 11
+        },
+        "execution_defaults": {
+          "navigation_timeout_seconds": 21,
+          "retry": 2
+        }
+      },
+      "content_checksum": "sha256:4e8bfe04b5b383242519de3e299ad9ac31d8e80977e4102626fa5b9f4fcfa3c1",
+      "release_input": {
+        "action_id": "act_0000000000000000000000000C",
+        "revision": 12,
+        "content_checksum": "sha256:4e8bfe04b5b383242519de3e299ad9ac31d8e80977e4102626fa5b9f4fcfa3c1"
+      },
+      "release_checksum": "sha256:275b27d275b895ca3d7e89b6238a778cff1ced9b1257114fee2883c8a5a9d261"
+    },
+    {
+      "name": "vector-13",
+      "content_input": {
+        "executor_kind": "browser_strategy",
+        "definition_schema_version": "1.0",
+        "parameter_schema": {
+          "type": "object",
+          "properties": {
+            "target_url": {
+              "type": "string",
+              "maxLength": 2048
+            },
+            "input_text": {
+              "type": "string",
+              "maxLength": 4096
+            }
+          },
+          "additionalProperties": false
+        },
+        "result_schema": {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "ok"
+          ],
+          "additionalProperties": false
+        },
+        "snapshot": {
+          "index": 12,
+          "label": "emoji-🚀",
+          "numeric": 1,
+          "nested": {
+            "z": [
+              12,
+              true,
+              null
+            ],
+            "a": {
+              "β": "beta",
+              "𐀀": "astral",
+              "€": "euro"
+            }
+          }
+        },
+        "execution_defaults": {
+          "navigation_timeout_seconds": 22,
+          "retry": 0
+        }
+      },
+      "content_checksum": "sha256:bcd34428b769ac6ed5e207a9cbd4fc72704395d5df6902040965175212a42be6",
+      "release_input": {
+        "action_id": "act_0000000000000000000000000D",
+        "revision": 13,
+        "content_checksum": "sha256:bcd34428b769ac6ed5e207a9cbd4fc72704395d5df6902040965175212a42be6"
+      },
+      "release_checksum": "sha256:9b423b218502a2205010aa08d6a009e45ce311434c36e371919d16c33e139d89"
+    },
+    {
+      "name": "vector-14",
+      "content_input": {
+        "executor_kind": "comment_campaign",
+        "definition_schema_version": "1.0",
+        "parameter_schema": {
+          "type": "object",
+          "properties": {
+            "target_url": {
+              "type": "string",
+              "maxLength": 2048
+            },
+            "input_text": {
+              "type": "string",
+              "maxLength": 4096
+            }
+          },
+          "additionalProperties": false
+        },
+        "result_schema": {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "ok"
+          ],
+          "additionalProperties": false
+        },
+        "snapshot": {
+          "nested": {
+            "z": [
+              13,
+              true,
+              null
+            ],
+            "a": {
+              "β": "beta",
+              "𐀀": "astral",
+              "€": "euro"
+            }
+          },
+          "numeric": -7,
+          "label": "line\nbreak",
+          "index": 13
+        },
+        "execution_defaults": {
+          "navigation_timeout_seconds": 23,
+          "retry": 1
+        }
+      },
+      "content_checksum": "sha256:9f2a4bf456b8a02e85c6d2ff4650e3706d190e72243dfa8779fa7a8537e10524",
+      "release_input": {
+        "action_id": "act_0000000000000000000000000E",
+        "revision": 14,
+        "content_checksum": "sha256:9f2a4bf456b8a02e85c6d2ff4650e3706d190e72243dfa8779fa7a8537e10524"
+      },
+      "release_checksum": "sha256:fe2a4e8c74eb68f8f678e99bce3370ae3e3f277d842132b28fb465e15da51c39"
+    },
+    {
+      "name": "vector-15",
+      "content_input": {
+        "executor_kind": "browser_strategy",
+        "definition_schema_version": "1.0",
+        "parameter_schema": {
+          "type": "object",
+          "properties": {
+            "target_url": {
+              "type": "string",
+              "maxLength": 2048
+            },
+            "input_text": {
+              "type": "string",
+              "maxLength": 4096
+            }
+          },
+          "additionalProperties": false
+        },
+        "result_schema": {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "ok"
+          ],
+          "additionalProperties": false
+        },
+        "snapshot": {
+          "index": 14,
+          "label": "quote-\"",
+          "numeric": 1.5,
+          "nested": {
+            "z": [
+              14,
+              true,
+              null
+            ],
+            "a": {
+              "β": "beta",
+              "𐀀": "astral",
+              "€": "euro"
+            }
+          }
+        },
+        "execution_defaults": {
+          "navigation_timeout_seconds": 24,
+          "retry": 2
+        }
+      },
+      "content_checksum": "sha256:cf6a5d5e5c0dac910a14927972804dbdc19ea372a9caf2506ad3f23c0fd2db03",
+      "release_input": {
+        "action_id": "act_0000000000000000000000000F",
+        "revision": 15,
+        "content_checksum": "sha256:cf6a5d5e5c0dac910a14927972804dbdc19ea372a9caf2506ad3f23c0fd2db03"
+      },
+      "release_checksum": "sha256:5465fad8161e7dee9a1d3397c2e01ab757e38013fde23d798d0be6ac813b8bae"
+    },
+    {
+      "name": "vector-16",
+      "content_input": {
+        "executor_kind": "comment_campaign",
+        "definition_schema_version": "1.0",
+        "parameter_schema": {
+          "type": "object",
+          "properties": {
+            "target_url": {
+              "type": "string",
+              "maxLength": 2048
+            },
+            "input_text": {
+              "type": "string",
+              "maxLength": 4096
+            }
+          },
+          "additionalProperties": false
+        },
+        "result_schema": {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "ok"
+          ],
+          "additionalProperties": false
+        },
+        "snapshot": {
+          "nested": {
+            "z": [
+              15,
+              true,
+              null
+            ],
+            "a": {
+              "β": "beta",
+              "𐀀": "astral",
+              "€": "euro"
+            }
+          },
+          "numeric": 1e-06,
+          "label": "plain",
+          "index": 15
+        },
+        "execution_defaults": {
+          "navigation_timeout_seconds": 25,
+          "retry": 0
+        }
+      },
+      "content_checksum": "sha256:483bf2f882246e8aeedc26f4c20100eb3c6f17bec2a7d2814b17074fab46133d",
+      "release_input": {
+        "action_id": "act_0000000000000000000000000G",
+        "revision": 16,
+        "content_checksum": "sha256:483bf2f882246e8aeedc26f4c20100eb3c6f17bec2a7d2814b17074fab46133d"
+      },
+      "release_checksum": "sha256:f5a03088f271e62c0f68a9a380e81b32a7896a72ac13bd8036125584461945b2"
+    },
+    {
+      "name": "vector-17",
+      "content_input": {
+        "executor_kind": "browser_strategy",
+        "definition_schema_version": "1.0",
+        "parameter_schema": {
+          "type": "object",
+          "properties": {
+            "target_url": {
+              "type": "string",
+              "maxLength": 2048
+            },
+            "input_text": {
+              "type": "string",
+              "maxLength": 4096
+            }
+          },
+          "additionalProperties": false
+        },
+        "result_schema": {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "ok"
+          ],
+          "additionalProperties": false
+        },
+        "snapshot": {
+          "index": 16,
+          "label": "中文",
+          "numeric": 1e-07,
+          "nested": {
+            "z": [
+              16,
+              true,
+              null
+            ],
+            "a": {
+              "β": "beta",
+              "𐀀": "astral",
+              "€": "euro"
+            }
+          }
+        },
+        "execution_defaults": {
+          "navigation_timeout_seconds": 26,
+          "retry": 1
+        }
+      },
+      "content_checksum": "sha256:60915baceb6382117ec4e6ad6e5ec911df70434af43e87f7bb56f9aee79af9c0",
+      "release_input": {
+        "action_id": "act_0000000000000000000000000H",
+        "revision": 17,
+        "content_checksum": "sha256:60915baceb6382117ec4e6ad6e5ec911df70434af43e87f7bb56f9aee79af9c0"
+      },
+      "release_checksum": "sha256:297594308488bfdfc57bd1e7713039909e97e2a6fe37e047b3e3145479867882"
+    },
+    {
+      "name": "vector-18",
+      "content_input": {
+        "executor_kind": "comment_campaign",
+        "definition_schema_version": "1.0",
+        "parameter_schema": {
+          "type": "object",
+          "properties": {
+            "target_url": {
+              "type": "string",
+              "maxLength": 2048
+            },
+            "input_text": {
+              "type": "string",
+              "maxLength": 4096
+            }
+          },
+          "additionalProperties": false
+        },
+        "result_schema": {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "ok"
+          ],
+          "additionalProperties": false
+        },
+        "snapshot": {
+          "nested": {
+            "z": [
+              17,
+              true,
+              null
+            ],
+            "a": {
+              "β": "beta",
+              "𐀀": "astral",
+              "€": "euro"
+            }
+          },
+          "numeric": 1e-20,
+          "label": "emoji-🚀",
+          "index": 17
+        },
+        "execution_defaults": {
+          "navigation_timeout_seconds": 27,
+          "retry": 2
+        }
+      },
+      "content_checksum": "sha256:9590365fce9aeb33d27574af084bec6fce94c55cd1dae5c90dc3605e6dce4488",
+      "release_input": {
+        "action_id": "act_0000000000000000000000000J",
+        "revision": 18,
+        "content_checksum": "sha256:9590365fce9aeb33d27574af084bec6fce94c55cd1dae5c90dc3605e6dce4488"
+      },
+      "release_checksum": "sha256:91541e9d3650dd03d47838e44ae6a24d6eb2814e8fecd98a385eb04b76862c48"
+    },
+    {
+      "name": "vector-19",
+      "content_input": {
+        "executor_kind": "browser_strategy",
+        "definition_schema_version": "1.0",
+        "parameter_schema": {
+          "type": "object",
+          "properties": {
+            "target_url": {
+              "type": "string",
+              "maxLength": 2048
+            },
+            "input_text": {
+              "type": "string",
+              "maxLength": 4096
+            }
+          },
+          "additionalProperties": false
+        },
+        "result_schema": {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "ok"
+          ],
+          "additionalProperties": false
+        },
+        "snapshot": {
+          "index": 18,
+          "label": "line\nbreak",
+          "numeric": 1e-21,
+          "nested": {
+            "z": [
+              18,
+              true,
+              null
+            ],
+            "a": {
+              "β": "beta",
+              "𐀀": "astral",
+              "€": "euro"
+            }
+          }
+        },
+        "execution_defaults": {
+          "navigation_timeout_seconds": 28,
+          "retry": 0
+        }
+      },
+      "content_checksum": "sha256:55f1325e26bd46f552a026072784a3665c1adbdc48b6f2b26279986779a9a204",
+      "release_input": {
+        "action_id": "act_0000000000000000000000000K",
+        "revision": 19,
+        "content_checksum": "sha256:55f1325e26bd46f552a026072784a3665c1adbdc48b6f2b26279986779a9a204"
+      },
+      "release_checksum": "sha256:8547bf73b4d03853fb9f458cc5165636f31a5ff2c1c070596038acfc3af0851a"
+    },
+    {
+      "name": "vector-20",
+      "content_input": {
+        "executor_kind": "comment_campaign",
+        "definition_schema_version": "1.0",
+        "parameter_schema": {
+          "type": "object",
+          "properties": {
+            "target_url": {
+              "type": "string",
+              "maxLength": 2048
+            },
+            "input_text": {
+              "type": "string",
+              "maxLength": 4096
+            }
+          },
+          "additionalProperties": false
+        },
+        "result_schema": {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "ok"
+          ],
+          "additionalProperties": false
+        },
+        "snapshot": {
+          "nested": {
+            "z": [
+              19,
+              true,
+              null
+            ],
+            "a": {
+              "β": "beta",
+              "𐀀": "astral",
+              "€": "euro"
+            }
+          },
+          "numeric": 333333333.3333333,
+          "label": "quote-\"",
+          "index": 19
+        },
+        "execution_defaults": {
+          "navigation_timeout_seconds": 29,
+          "retry": 1
+        }
+      },
+      "content_checksum": "sha256:95e23bd934c7111cb5557fa59fa25669810629f7a73c13c227d1870d3616c329",
+      "release_input": {
+        "action_id": "act_0000000000000000000000000M",
+        "revision": 20,
+        "content_checksum": "sha256:95e23bd934c7111cb5557fa59fa25669810629f7a73c13c227d1870d3616c329"
+      },
+      "release_checksum": "sha256:b7e6c529ca917fa4ccb2cb885e7d999a80f60587451e2188dfd9d0cc46b816ed"
+    },
+    {
+      "name": "vector-21",
+      "content_input": {
+        "executor_kind": "browser_strategy",
+        "definition_schema_version": "1.0",
+        "parameter_schema": {
+          "type": "object",
+          "properties": {
+            "target_url": {
+              "type": "string",
+              "maxLength": 2048
+            },
+            "input_text": {
+              "type": "string",
+              "maxLength": 4096
+            }
+          },
+          "additionalProperties": false
+        },
+        "result_schema": {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "ok"
+          ],
+          "additionalProperties": false
+        },
+        "snapshot": {
+          "index": 20,
+          "label": "plain",
+          "numeric": 0,
+          "nested": {
+            "z": [
+              20,
+              true,
+              null
+            ],
+            "a": {
+              "β": "beta",
+              "𐀀": "astral",
+              "€": "euro"
+            }
+          }
+        },
+        "execution_defaults": {
+          "navigation_timeout_seconds": 30,
+          "retry": 2
+        }
+      },
+      "content_checksum": "sha256:0a46b35e684ae82b89271de47999f1141c4025d490cb3c3c75572031f8b2f35a",
+      "release_input": {
+        "action_id": "act_0000000000000000000000000N",
+        "revision": 21,
+        "content_checksum": "sha256:0a46b35e684ae82b89271de47999f1141c4025d490cb3c3c75572031f8b2f35a"
+      },
+      "release_checksum": "sha256:21e8d1705f9069e2be3ae7ab468924821d78181dd2a43a81cad53c1059ff728c"
+    },
+    {
+      "name": "vector-22",
+      "content_input": {
+        "executor_kind": "comment_campaign",
+        "definition_schema_version": "1.0",
+        "parameter_schema": {
+          "type": "object",
+          "properties": {
+            "target_url": {
+              "type": "string",
+              "maxLength": 2048
+            },
+            "input_text": {
+              "type": "string",
+              "maxLength": 4096
+            }
+          },
+          "additionalProperties": false
+        },
+        "result_schema": {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "ok"
+          ],
+          "additionalProperties": false
+        },
+        "snapshot": {
+          "nested": {
+            "z": [
+              21,
+              true,
+              null
+            ],
+            "a": {
+              "β": "beta",
+              "𐀀": "astral",
+              "€": "euro"
+            }
+          },
+          "numeric": -0.0,
+          "label": "中文",
+          "index": 21
+        },
+        "execution_defaults": {
+          "navigation_timeout_seconds": 31,
+          "retry": 0
+        }
+      },
+      "content_checksum": "sha256:ee3cc59902a168e31102542488f5f177bd718f58330e62865870b0f130d639a8",
+      "release_input": {
+        "action_id": "act_0000000000000000000000000P",
+        "revision": 22,
+        "content_checksum": "sha256:ee3cc59902a168e31102542488f5f177bd718f58330e62865870b0f130d639a8"
+      },
+      "release_checksum": "sha256:24aa0b26b35ff22127452ffe4bc242c1487bd85d910e956d7d24999dd9885599"
+    },
+    {
+      "name": "vector-23",
+      "content_input": {
+        "executor_kind": "browser_strategy",
+        "definition_schema_version": "1.0",
+        "parameter_schema": {
+          "type": "object",
+          "properties": {
+            "target_url": {
+              "type": "string",
+              "maxLength": 2048
+            },
+            "input_text": {
+              "type": "string",
+              "maxLength": 4096
+            }
+          },
+          "additionalProperties": false
+        },
+        "result_schema": {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "ok"
+          ],
+          "additionalProperties": false
+        },
+        "snapshot": {
+          "index": 22,
+          "label": "emoji-🚀",
+          "numeric": 1,
+          "nested": {
+            "z": [
+              22,
+              true,
+              null
+            ],
+            "a": {
+              "β": "beta",
+              "𐀀": "astral",
+              "€": "euro"
+            }
+          }
+        },
+        "execution_defaults": {
+          "navigation_timeout_seconds": 32,
+          "retry": 1
+        }
+      },
+      "content_checksum": "sha256:cd370c9b24320f5b4a6bbbd292a1345e6e865242c74b61477dcdfa705454e978",
+      "release_input": {
+        "action_id": "act_0000000000000000000000000Q",
+        "revision": 23,
+        "content_checksum": "sha256:cd370c9b24320f5b4a6bbbd292a1345e6e865242c74b61477dcdfa705454e978"
+      },
+      "release_checksum": "sha256:69b068f5708f5c05cbc3c26756dd694d227e65cd2886fdc4659edeefa2e35b6d"
+    },
+    {
+      "name": "vector-24",
+      "content_input": {
+        "executor_kind": "comment_campaign",
+        "definition_schema_version": "1.0",
+        "parameter_schema": {
+          "type": "object",
+          "properties": {
+            "target_url": {
+              "type": "string",
+              "maxLength": 2048
+            },
+            "input_text": {
+              "type": "string",
+              "maxLength": 4096
+            }
+          },
+          "additionalProperties": false
+        },
+        "result_schema": {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "ok"
+          ],
+          "additionalProperties": false
+        },
+        "snapshot": {
+          "nested": {
+            "z": [
+              23,
+              true,
+              null
+            ],
+            "a": {
+              "β": "beta",
+              "𐀀": "astral",
+              "€": "euro"
+            }
+          },
+          "numeric": -7,
+          "label": "line\nbreak",
+          "index": 23
+        },
+        "execution_defaults": {
+          "navigation_timeout_seconds": 33,
+          "retry": 2
+        }
+      },
+      "content_checksum": "sha256:b1ec764997e140500d118c0be41f3e4046d5a8c3d1b8dbd48a4c1df166c11854",
+      "release_input": {
+        "action_id": "act_0000000000000000000000000R",
+        "revision": 24,
+        "content_checksum": "sha256:b1ec764997e140500d118c0be41f3e4046d5a8c3d1b8dbd48a4c1df166c11854"
+      },
+      "release_checksum": "sha256:5abc8448b417dc4736de49cd645c3ad4fc3f3869f4208c317fe04eae5693da6f"
+    },
+    {
+      "name": "vector-25",
+      "content_input": {
+        "executor_kind": "browser_strategy",
+        "definition_schema_version": "1.0",
+        "parameter_schema": {
+          "type": "object",
+          "properties": {
+            "target_url": {
+              "type": "string",
+              "maxLength": 2048
+            },
+            "input_text": {
+              "type": "string",
+              "maxLength": 4096
+            }
+          },
+          "additionalProperties": false
+        },
+        "result_schema": {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "ok"
+          ],
+          "additionalProperties": false
+        },
+        "snapshot": {
+          "index": 24,
+          "label": "quote-\"",
+          "numeric": 1.5,
+          "nested": {
+            "z": [
+              24,
+              true,
+              null
+            ],
+            "a": {
+              "β": "beta",
+              "𐀀": "astral",
+              "€": "euro"
+            }
+          }
+        },
+        "execution_defaults": {
+          "navigation_timeout_seconds": 34,
+          "retry": 0
+        }
+      },
+      "content_checksum": "sha256:16161c8d9ee03cfe79d422426fc1988715a60dd678d8738781f01d86ebc425c9",
+      "release_input": {
+        "action_id": "act_0000000000000000000000000S",
+        "revision": 25,
+        "content_checksum": "sha256:16161c8d9ee03cfe79d422426fc1988715a60dd678d8738781f01d86ebc425c9"
+      },
+      "release_checksum": "sha256:c1c5510245604373c885b832cd1bdd67bc354f415f2ae155a67a24979562a510"
+    },
+    {
+      "name": "vector-26",
+      "content_input": {
+        "executor_kind": "comment_campaign",
+        "definition_schema_version": "1.0",
+        "parameter_schema": {
+          "type": "object",
+          "properties": {
+            "target_url": {
+              "type": "string",
+              "maxLength": 2048
+            },
+            "input_text": {
+              "type": "string",
+              "maxLength": 4096
+            }
+          },
+          "additionalProperties": false
+        },
+        "result_schema": {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "ok"
+          ],
+          "additionalProperties": false
+        },
+        "snapshot": {
+          "nested": {
+            "z": [
+              25,
+              true,
+              null
+            ],
+            "a": {
+              "β": "beta",
+              "𐀀": "astral",
+              "€": "euro"
+            }
+          },
+          "numeric": 1e-06,
+          "label": "plain",
+          "index": 25
+        },
+        "execution_defaults": {
+          "navigation_timeout_seconds": 35,
+          "retry": 1
+        }
+      },
+      "content_checksum": "sha256:05b2e5b732bc411d58f81c05fd53ff31b319b43a64498a2cce0c2b3778edf89d",
+      "release_input": {
+        "action_id": "act_0000000000000000000000000T",
+        "revision": 26,
+        "content_checksum": "sha256:05b2e5b732bc411d58f81c05fd53ff31b319b43a64498a2cce0c2b3778edf89d"
+      },
+      "release_checksum": "sha256:7cc2c0622036e2ca6ba00458c6d4ff13188db3093aade0603a94dd982276c40f"
+    },
+    {
+      "name": "vector-27",
+      "content_input": {
+        "executor_kind": "browser_strategy",
+        "definition_schema_version": "1.0",
+        "parameter_schema": {
+          "type": "object",
+          "properties": {
+            "target_url": {
+              "type": "string",
+              "maxLength": 2048
+            },
+            "input_text": {
+              "type": "string",
+              "maxLength": 4096
+            }
+          },
+          "additionalProperties": false
+        },
+        "result_schema": {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "ok"
+          ],
+          "additionalProperties": false
+        },
+        "snapshot": {
+          "index": 26,
+          "label": "中文",
+          "numeric": 1e-07,
+          "nested": {
+            "z": [
+              26,
+              true,
+              null
+            ],
+            "a": {
+              "β": "beta",
+              "𐀀": "astral",
+              "€": "euro"
+            }
+          }
+        },
+        "execution_defaults": {
+          "navigation_timeout_seconds": 36,
+          "retry": 2
+        }
+      },
+      "content_checksum": "sha256:639df5227b9207c3524f89421555c0d9e1d762d95f9a395fc66228adcb9dc7e6",
+      "release_input": {
+        "action_id": "act_0000000000000000000000000V",
+        "revision": 27,
+        "content_checksum": "sha256:639df5227b9207c3524f89421555c0d9e1d762d95f9a395fc66228adcb9dc7e6"
+      },
+      "release_checksum": "sha256:35a9073088378e13252dd5512136fff11c2fecd94be89c96a8596ddb93d6af43"
+    },
+    {
+      "name": "vector-28",
+      "content_input": {
+        "executor_kind": "comment_campaign",
+        "definition_schema_version": "1.0",
+        "parameter_schema": {
+          "type": "object",
+          "properties": {
+            "target_url": {
+              "type": "string",
+              "maxLength": 2048
+            },
+            "input_text": {
+              "type": "string",
+              "maxLength": 4096
+            }
+          },
+          "additionalProperties": false
+        },
+        "result_schema": {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "ok"
+          ],
+          "additionalProperties": false
+        },
+        "snapshot": {
+          "nested": {
+            "z": [
+              27,
+              true,
+              null
+            ],
+            "a": {
+              "β": "beta",
+              "𐀀": "astral",
+              "€": "euro"
+            }
+          },
+          "numeric": 1e-20,
+          "label": "emoji-🚀",
+          "index": 27
+        },
+        "execution_defaults": {
+          "navigation_timeout_seconds": 37,
+          "retry": 0
+        }
+      },
+      "content_checksum": "sha256:dd3e5aec29859516cd7e94d8d46a096baf2f316a9b8709394734f4656bdef8ae",
+      "release_input": {
+        "action_id": "act_0000000000000000000000000W",
+        "revision": 28,
+        "content_checksum": "sha256:dd3e5aec29859516cd7e94d8d46a096baf2f316a9b8709394734f4656bdef8ae"
+      },
+      "release_checksum": "sha256:76bad3a2c744b9b3310ac2443f0366a668efc440e47f0c5127e3e7bde789551d"
+    },
+    {
+      "name": "vector-29",
+      "content_input": {
+        "executor_kind": "browser_strategy",
+        "definition_schema_version": "1.0",
+        "parameter_schema": {
+          "type": "object",
+          "properties": {
+            "target_url": {
+              "type": "string",
+              "maxLength": 2048
+            },
+            "input_text": {
+              "type": "string",
+              "maxLength": 4096
+            }
+          },
+          "additionalProperties": false
+        },
+        "result_schema": {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "ok"
+          ],
+          "additionalProperties": false
+        },
+        "snapshot": {
+          "index": 28,
+          "label": "line\nbreak",
+          "numeric": 1e-21,
+          "nested": {
+            "z": [
+              28,
+              true,
+              null
+            ],
+            "a": {
+              "β": "beta",
+              "𐀀": "astral",
+              "€": "euro"
+            }
+          }
+        },
+        "execution_defaults": {
+          "navigation_timeout_seconds": 38,
+          "retry": 1
+        }
+      },
+      "content_checksum": "sha256:dfce848f429d8ee0a714faa623edb80e16ee50b6e2a15d2f76d8b1660fd8b5e8",
+      "release_input": {
+        "action_id": "act_0000000000000000000000000X",
+        "revision": 29,
+        "content_checksum": "sha256:dfce848f429d8ee0a714faa623edb80e16ee50b6e2a15d2f76d8b1660fd8b5e8"
+      },
+      "release_checksum": "sha256:2fd6f94a36c36a83ace6102e670785f1a63d05f7e336c579c5c9bc491ca9145f"
+    },
+    {
+      "name": "vector-30",
+      "content_input": {
+        "executor_kind": "comment_campaign",
+        "definition_schema_version": "1.0",
+        "parameter_schema": {
+          "type": "object",
+          "properties": {
+            "target_url": {
+              "type": "string",
+              "maxLength": 2048
+            },
+            "input_text": {
+              "type": "string",
+              "maxLength": 4096
+            }
+          },
+          "additionalProperties": false
+        },
+        "result_schema": {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "ok"
+          ],
+          "additionalProperties": false
+        },
+        "snapshot": {
+          "nested": {
+            "z": [
+              29,
+              true,
+              null
+            ],
+            "a": {
+              "β": "beta",
+              "𐀀": "astral",
+              "€": "euro"
+            }
+          },
+          "numeric": 333333333.3333333,
+          "label": "quote-\"",
+          "index": 29
+        },
+        "execution_defaults": {
+          "navigation_timeout_seconds": 39,
+          "retry": 2
+        }
+      },
+      "content_checksum": "sha256:fda0c64177256963476fcc3567ddc9d69ba58a6d59bf60366ed2a7f788dc9ace",
+      "release_input": {
+        "action_id": "act_0000000000000000000000000Y",
+        "revision": 30,
+        "content_checksum": "sha256:fda0c64177256963476fcc3567ddc9d69ba58a6d59bf60366ed2a7f788dc9ace"
+      },
+      "release_checksum": "sha256:ddcf031fb64e6035db55aa65c2393df1c11ac8f2918418b4fb73045d94507ca3"
+    },
+    {
+      "name": "vector-31",
+      "content_input": {
+        "executor_kind": "browser_strategy",
+        "definition_schema_version": "1.0",
+        "parameter_schema": {
+          "type": "object",
+          "properties": {
+            "target_url": {
+              "type": "string",
+              "maxLength": 2048
+            },
+            "input_text": {
+              "type": "string",
+              "maxLength": 4096
+            }
+          },
+          "additionalProperties": false
+        },
+        "result_schema": {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "ok"
+          ],
+          "additionalProperties": false
+        },
+        "snapshot": {
+          "index": 30,
+          "label": "plain",
+          "numeric": 0,
+          "nested": {
+            "z": [
+              30,
+              true,
+              null
+            ],
+            "a": {
+              "β": "beta",
+              "𐀀": "astral",
+              "€": "euro"
+            }
+          }
+        },
+        "execution_defaults": {
+          "navigation_timeout_seconds": 40,
+          "retry": 0
+        }
+      },
+      "content_checksum": "sha256:d19e7788ccd7ebdf20936ebf7802af85ea0105899b123a85e33bedd1e6fcdaec",
+      "release_input": {
+        "action_id": "act_0000000000000000000000000Z",
+        "revision": 31,
+        "content_checksum": "sha256:d19e7788ccd7ebdf20936ebf7802af85ea0105899b123a85e33bedd1e6fcdaec"
+      },
+      "release_checksum": "sha256:6503b8b6bdb3711dfeb58e65b534c139548b45385a80aa610fc0c9aa4289706e"
+    },
+    {
+      "name": "vector-32",
+      "content_input": {
+        "executor_kind": "comment_campaign",
+        "definition_schema_version": "1.0",
+        "parameter_schema": {
+          "type": "object",
+          "properties": {
+            "target_url": {
+              "type": "string",
+              "maxLength": 2048
+            },
+            "input_text": {
+              "type": "string",
+              "maxLength": 4096
+            }
+          },
+          "additionalProperties": false
+        },
+        "result_schema": {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "ok"
+          ],
+          "additionalProperties": false
+        },
+        "snapshot": {
+          "nested": {
+            "z": [
+              31,
+              true,
+              null
+            ],
+            "a": {
+              "β": "beta",
+              "𐀀": "astral",
+              "€": "euro"
+            }
+          },
+          "numeric": -0.0,
+          "label": "中文",
+          "index": 31
+        },
+        "execution_defaults": {
+          "navigation_timeout_seconds": 41,
+          "retry": 1
+        }
+      },
+      "content_checksum": "sha256:9d30fc3746a0832ac8c772996e20c2e1ed2df2a66720cadc6afecf7e9b30c878",
+      "release_input": {
+        "action_id": "act_00000000000000000000000010",
+        "revision": 32,
+        "content_checksum": "sha256:9d30fc3746a0832ac8c772996e20c2e1ed2df2a66720cadc6afecf7e9b30c878"
+      },
+      "release_checksum": "sha256:2eb019df4333124ff52ddb8da0674a8b20462fa441a37714811ef3e21399bb52"
+    },
+    {
+      "name": "vector-33",
+      "content_input": {
+        "executor_kind": "browser_strategy",
+        "definition_schema_version": "1.0",
+        "parameter_schema": {
+          "type": "object",
+          "properties": {
+            "target_url": {
+              "type": "string",
+              "maxLength": 2048
+            },
+            "input_text": {
+              "type": "string",
+              "maxLength": 4096
+            }
+          },
+          "additionalProperties": false
+        },
+        "result_schema": {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "ok"
+          ],
+          "additionalProperties": false
+        },
+        "snapshot": {
+          "index": 32,
+          "label": "emoji-🚀",
+          "numeric": 1,
+          "nested": {
+            "z": [
+              32,
+              true,
+              null
+            ],
+            "a": {
+              "β": "beta",
+              "𐀀": "astral",
+              "€": "euro"
+            }
+          }
+        },
+        "execution_defaults": {
+          "navigation_timeout_seconds": 42,
+          "retry": 2
+        }
+      },
+      "content_checksum": "sha256:ad0f0da9b326992d682a3c37cb7570643535fa87a32dc9d6833a886eec658391",
+      "release_input": {
+        "action_id": "act_00000000000000000000000011",
+        "revision": 33,
+        "content_checksum": "sha256:ad0f0da9b326992d682a3c37cb7570643535fa87a32dc9d6833a886eec658391"
+      },
+      "release_checksum": "sha256:f1a7ec688699c994af559f6b559315e1d6510de4f97ff0e49cf99ac5a24a5fbb"
+    },
+    {
+      "name": "vector-34",
+      "content_input": {
+        "executor_kind": "comment_campaign",
+        "definition_schema_version": "1.0",
+        "parameter_schema": {
+          "type": "object",
+          "properties": {
+            "target_url": {
+              "type": "string",
+              "maxLength": 2048
+            },
+            "input_text": {
+              "type": "string",
+              "maxLength": 4096
+            }
+          },
+          "additionalProperties": false
+        },
+        "result_schema": {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "ok"
+          ],
+          "additionalProperties": false
+        },
+        "snapshot": {
+          "nested": {
+            "z": [
+              33,
+              true,
+              null
+            ],
+            "a": {
+              "β": "beta",
+              "𐀀": "astral",
+              "€": "euro"
+            }
+          },
+          "numeric": -7,
+          "label": "line\nbreak",
+          "index": 33
+        },
+        "execution_defaults": {
+          "navigation_timeout_seconds": 43,
+          "retry": 0
+        }
+      },
+      "content_checksum": "sha256:3554bd61427cb51f45ca0573b5cdbb973a89876adeef9c31179b0986eabca013",
+      "release_input": {
+        "action_id": "act_00000000000000000000000012",
+        "revision": 34,
+        "content_checksum": "sha256:3554bd61427cb51f45ca0573b5cdbb973a89876adeef9c31179b0986eabca013"
+      },
+      "release_checksum": "sha256:cd183dc7b17f31aca78fd293132758555c44e30a4e8af1d180ae5c47e861aae5"
+    },
+    {
+      "name": "vector-35",
+      "content_input": {
+        "executor_kind": "browser_strategy",
+        "definition_schema_version": "1.0",
+        "parameter_schema": {
+          "type": "object",
+          "properties": {
+            "target_url": {
+              "type": "string",
+              "maxLength": 2048
+            },
+            "input_text": {
+              "type": "string",
+              "maxLength": 4096
+            }
+          },
+          "additionalProperties": false
+        },
+        "result_schema": {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "ok"
+          ],
+          "additionalProperties": false
+        },
+        "snapshot": {
+          "index": 34,
+          "label": "quote-\"",
+          "numeric": 1.5,
+          "nested": {
+            "z": [
+              34,
+              true,
+              null
+            ],
+            "a": {
+              "β": "beta",
+              "𐀀": "astral",
+              "€": "euro"
+            }
+          }
+        },
+        "execution_defaults": {
+          "navigation_timeout_seconds": 44,
+          "retry": 1
+        }
+      },
+      "content_checksum": "sha256:4853f1c8981349f3fc6be41e6da898fbc8a0d4c6f8d94374f4a75571468f81e9",
+      "release_input": {
+        "action_id": "act_00000000000000000000000013",
+        "revision": 35,
+        "content_checksum": "sha256:4853f1c8981349f3fc6be41e6da898fbc8a0d4c6f8d94374f4a75571468f81e9"
+      },
+      "release_checksum": "sha256:ace7accd8eece2da6434cb5e09f76321c0243edcaecf2e47fbe20be684b58293"
+    },
+    {
+      "name": "vector-36",
+      "content_input": {
+        "executor_kind": "comment_campaign",
+        "definition_schema_version": "1.0",
+        "parameter_schema": {
+          "type": "object",
+          "properties": {
+            "target_url": {
+              "type": "string",
+              "maxLength": 2048
+            },
+            "input_text": {
+              "type": "string",
+              "maxLength": 4096
+            }
+          },
+          "additionalProperties": false
+        },
+        "result_schema": {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "ok"
+          ],
+          "additionalProperties": false
+        },
+        "snapshot": {
+          "nested": {
+            "z": [
+              35,
+              true,
+              null
+            ],
+            "a": {
+              "β": "beta",
+              "𐀀": "astral",
+              "€": "euro"
+            }
+          },
+          "numeric": 1e-06,
+          "label": "plain",
+          "index": 35
+        },
+        "execution_defaults": {
+          "navigation_timeout_seconds": 45,
+          "retry": 2
+        }
+      },
+      "content_checksum": "sha256:ecf0f4e1ef397ad1b56007e0bd9f353e8365931cb708c4bbae00b8b9018b8f34",
+      "release_input": {
+        "action_id": "act_00000000000000000000000014",
+        "revision": 36,
+        "content_checksum": "sha256:ecf0f4e1ef397ad1b56007e0bd9f353e8365931cb708c4bbae00b8b9018b8f34"
+      },
+      "release_checksum": "sha256:4cd089582105fc408c448afbd3e08f560915b903a0494f1b67d7a1d1a11503a6"
+    },
+    {
+      "name": "vector-37",
+      "content_input": {
+        "executor_kind": "browser_strategy",
+        "definition_schema_version": "1.0",
+        "parameter_schema": {
+          "type": "object",
+          "properties": {
+            "target_url": {
+              "type": "string",
+              "maxLength": 2048
+            },
+            "input_text": {
+              "type": "string",
+              "maxLength": 4096
+            }
+          },
+          "additionalProperties": false
+        },
+        "result_schema": {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "ok"
+          ],
+          "additionalProperties": false
+        },
+        "snapshot": {
+          "index": 36,
+          "label": "中文",
+          "numeric": 1e-07,
+          "nested": {
+            "z": [
+              36,
+              true,
+              null
+            ],
+            "a": {
+              "β": "beta",
+              "𐀀": "astral",
+              "€": "euro"
+            }
+          }
+        },
+        "execution_defaults": {
+          "navigation_timeout_seconds": 46,
+          "retry": 0
+        }
+      },
+      "content_checksum": "sha256:80e54a3735a5a884827afbacf25ea4898f38bc62bc675348ed24eb16d8f254dd",
+      "release_input": {
+        "action_id": "act_00000000000000000000000015",
+        "revision": 37,
+        "content_checksum": "sha256:80e54a3735a5a884827afbacf25ea4898f38bc62bc675348ed24eb16d8f254dd"
+      },
+      "release_checksum": "sha256:82d1e470c2f9e76607692c0bc1e8d8d702042b4f4d75b795655b9c59da7a0e54"
+    },
+    {
+      "name": "vector-38",
+      "content_input": {
+        "executor_kind": "comment_campaign",
+        "definition_schema_version": "1.0",
+        "parameter_schema": {
+          "type": "object",
+          "properties": {
+            "target_url": {
+              "type": "string",
+              "maxLength": 2048
+            },
+            "input_text": {
+              "type": "string",
+              "maxLength": 4096
+            }
+          },
+          "additionalProperties": false
+        },
+        "result_schema": {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "ok"
+          ],
+          "additionalProperties": false
+        },
+        "snapshot": {
+          "nested": {
+            "z": [
+              37,
+              true,
+              null
+            ],
+            "a": {
+              "β": "beta",
+              "𐀀": "astral",
+              "€": "euro"
+            }
+          },
+          "numeric": 1e-20,
+          "label": "emoji-🚀",
+          "index": 37
+        },
+        "execution_defaults": {
+          "navigation_timeout_seconds": 47,
+          "retry": 1
+        }
+      },
+      "content_checksum": "sha256:65abddfd8576e4b33bca8f07958322c8e7705a669f4474130de3130749a7f061",
+      "release_input": {
+        "action_id": "act_00000000000000000000000016",
+        "revision": 38,
+        "content_checksum": "sha256:65abddfd8576e4b33bca8f07958322c8e7705a669f4474130de3130749a7f061"
+      },
+      "release_checksum": "sha256:13721a372c3b0eb5717a415abc6ceed52f26e8cb05327eeb2f0b8ca30876c54b"
+    },
+    {
+      "name": "vector-39",
+      "content_input": {
+        "executor_kind": "browser_strategy",
+        "definition_schema_version": "1.0",
+        "parameter_schema": {
+          "type": "object",
+          "properties": {
+            "target_url": {
+              "type": "string",
+              "maxLength": 2048
+            },
+            "input_text": {
+              "type": "string",
+              "maxLength": 4096
+            }
+          },
+          "additionalProperties": false
+        },
+        "result_schema": {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "ok"
+          ],
+          "additionalProperties": false
+        },
+        "snapshot": {
+          "index": 38,
+          "label": "line\nbreak",
+          "numeric": 1e-21,
+          "nested": {
+            "z": [
+              38,
+              true,
+              null
+            ],
+            "a": {
+              "β": "beta",
+              "𐀀": "astral",
+              "€": "euro"
+            }
+          }
+        },
+        "execution_defaults": {
+          "navigation_timeout_seconds": 48,
+          "retry": 2
+        }
+      },
+      "content_checksum": "sha256:53b4833e5806188051f55b39858819eec7bf5763a71092f1f20b1283475f1dc1",
+      "release_input": {
+        "action_id": "act_00000000000000000000000017",
+        "revision": 39,
+        "content_checksum": "sha256:53b4833e5806188051f55b39858819eec7bf5763a71092f1f20b1283475f1dc1"
+      },
+      "release_checksum": "sha256:5ec8fcf11658ed3cca4b97604aa2522590443a77a01a7a54a1d3a4c3da16722f"
+    },
+    {
+      "name": "vector-40",
+      "content_input": {
+        "executor_kind": "comment_campaign",
+        "definition_schema_version": "1.0",
+        "parameter_schema": {
+          "type": "object",
+          "properties": {
+            "target_url": {
+              "type": "string",
+              "maxLength": 2048
+            },
+            "input_text": {
+              "type": "string",
+              "maxLength": 4096
+            }
+          },
+          "additionalProperties": false
+        },
+        "result_schema": {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "ok"
+          ],
+          "additionalProperties": false
+        },
+        "snapshot": {
+          "nested": {
+            "z": [
+              39,
+              true,
+              null
+            ],
+            "a": {
+              "β": "beta",
+              "𐀀": "astral",
+              "€": "euro"
+            }
+          },
+          "numeric": 333333333.3333333,
+          "label": "quote-\"",
+          "index": 39
+        },
+        "execution_defaults": {
+          "navigation_timeout_seconds": 49,
+          "retry": 0
+        }
+      },
+      "content_checksum": "sha256:1b94d917e5aca571580d9b6fca6acbef73ad883eebb265bf86e4b4e4244c882d",
+      "release_input": {
+        "action_id": "act_00000000000000000000000018",
+        "revision": 40,
+        "content_checksum": "sha256:1b94d917e5aca571580d9b6fca6acbef73ad883eebb265bf86e4b4e4244c882d"
+      },
+      "release_checksum": "sha256:e8aa4b061d22770b2d4b818cb6a7a82f9336e8ef90ac50981e1f3aec772c76bd"
+    },
+    {
+      "name": "vector-41",
+      "content_input": {
+        "executor_kind": "browser_strategy",
+        "definition_schema_version": "1.0",
+        "parameter_schema": {
+          "type": "object",
+          "properties": {
+            "target_url": {
+              "type": "string",
+              "maxLength": 2048
+            },
+            "input_text": {
+              "type": "string",
+              "maxLength": 4096
+            }
+          },
+          "additionalProperties": false
+        },
+        "result_schema": {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "ok"
+          ],
+          "additionalProperties": false
+        },
+        "snapshot": {
+          "index": 40,
+          "label": "plain",
+          "numeric": 0,
+          "nested": {
+            "z": [
+              40,
+              true,
+              null
+            ],
+            "a": {
+              "β": "beta",
+              "𐀀": "astral",
+              "€": "euro"
+            }
+          }
+        },
+        "execution_defaults": {
+          "navigation_timeout_seconds": 50,
+          "retry": 1
+        }
+      },
+      "content_checksum": "sha256:78bd0bdd4309c22ad601d82a8cef5f8442490dbbfd9d75cb309deabaf19b1670",
+      "release_input": {
+        "action_id": "act_00000000000000000000000019",
+        "revision": 41,
+        "content_checksum": "sha256:78bd0bdd4309c22ad601d82a8cef5f8442490dbbfd9d75cb309deabaf19b1670"
+      },
+      "release_checksum": "sha256:dde48b9fd692c98ea29ce7aafec9b2a7ee04e924aeef1b097f87b7bee07d52fe"
+    },
+    {
+      "name": "vector-42",
+      "content_input": {
+        "executor_kind": "comment_campaign",
+        "definition_schema_version": "1.0",
+        "parameter_schema": {
+          "type": "object",
+          "properties": {
+            "target_url": {
+              "type": "string",
+              "maxLength": 2048
+            },
+            "input_text": {
+              "type": "string",
+              "maxLength": 4096
+            }
+          },
+          "additionalProperties": false
+        },
+        "result_schema": {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "ok"
+          ],
+          "additionalProperties": false
+        },
+        "snapshot": {
+          "nested": {
+            "z": [
+              41,
+              true,
+              null
+            ],
+            "a": {
+              "β": "beta",
+              "𐀀": "astral",
+              "€": "euro"
+            }
+          },
+          "numeric": -0.0,
+          "label": "中文",
+          "index": 41
+        },
+        "execution_defaults": {
+          "navigation_timeout_seconds": 51,
+          "retry": 2
+        }
+      },
+      "content_checksum": "sha256:ce6881f183f9265c82fa14d5f89b018f00527c81f0e417021df734bab2940f40",
+      "release_input": {
+        "action_id": "act_0000000000000000000000001A",
+        "revision": 42,
+        "content_checksum": "sha256:ce6881f183f9265c82fa14d5f89b018f00527c81f0e417021df734bab2940f40"
+      },
+      "release_checksum": "sha256:5be8ad8ff555d71ceb2dbe271e547f100de2a8c615e8d83f32774588597a1d69"
+    },
+    {
+      "name": "vector-43",
+      "content_input": {
+        "executor_kind": "browser_strategy",
+        "definition_schema_version": "1.0",
+        "parameter_schema": {
+          "type": "object",
+          "properties": {
+            "target_url": {
+              "type": "string",
+              "maxLength": 2048
+            },
+            "input_text": {
+              "type": "string",
+              "maxLength": 4096
+            }
+          },
+          "additionalProperties": false
+        },
+        "result_schema": {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "ok"
+          ],
+          "additionalProperties": false
+        },
+        "snapshot": {
+          "index": 42,
+          "label": "emoji-🚀",
+          "numeric": 1,
+          "nested": {
+            "z": [
+              42,
+              true,
+              null
+            ],
+            "a": {
+              "β": "beta",
+              "𐀀": "astral",
+              "€": "euro"
+            }
+          }
+        },
+        "execution_defaults": {
+          "navigation_timeout_seconds": 52,
+          "retry": 0
+        }
+      },
+      "content_checksum": "sha256:0f00eec897932380a31e0553a718fd302852ad4201d4ec08c87cf101b72d33b3",
+      "release_input": {
+        "action_id": "act_0000000000000000000000001B",
+        "revision": 43,
+        "content_checksum": "sha256:0f00eec897932380a31e0553a718fd302852ad4201d4ec08c87cf101b72d33b3"
+      },
+      "release_checksum": "sha256:e3930baf14d473f9ece9800e6c27bb4ad9beebed41013010bafbecdfa5c0398d"
+    },
+    {
+      "name": "vector-44",
+      "content_input": {
+        "executor_kind": "comment_campaign",
+        "definition_schema_version": "1.0",
+        "parameter_schema": {
+          "type": "object",
+          "properties": {
+            "target_url": {
+              "type": "string",
+              "maxLength": 2048
+            },
+            "input_text": {
+              "type": "string",
+              "maxLength": 4096
+            }
+          },
+          "additionalProperties": false
+        },
+        "result_schema": {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "ok"
+          ],
+          "additionalProperties": false
+        },
+        "snapshot": {
+          "nested": {
+            "z": [
+              43,
+              true,
+              null
+            ],
+            "a": {
+              "β": "beta",
+              "𐀀": "astral",
+              "€": "euro"
+            }
+          },
+          "numeric": -7,
+          "label": "line\nbreak",
+          "index": 43
+        },
+        "execution_defaults": {
+          "navigation_timeout_seconds": 53,
+          "retry": 1
+        }
+      },
+      "content_checksum": "sha256:2254251cf27c14ed74d1d4b753accabd8d25f0b79658fa19f8fbdc3c053fae4a",
+      "release_input": {
+        "action_id": "act_0000000000000000000000001C",
+        "revision": 44,
+        "content_checksum": "sha256:2254251cf27c14ed74d1d4b753accabd8d25f0b79658fa19f8fbdc3c053fae4a"
+      },
+      "release_checksum": "sha256:fe0dc350ca71747bf1304b3e8aa4dd5d044923b44a496b802eaea4d4521a03bf"
+    },
+    {
+      "name": "vector-45",
+      "content_input": {
+        "executor_kind": "browser_strategy",
+        "definition_schema_version": "1.0",
+        "parameter_schema": {
+          "type": "object",
+          "properties": {
+            "target_url": {
+              "type": "string",
+              "maxLength": 2048
+            },
+            "input_text": {
+              "type": "string",
+              "maxLength": 4096
+            }
+          },
+          "additionalProperties": false
+        },
+        "result_schema": {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "ok"
+          ],
+          "additionalProperties": false
+        },
+        "snapshot": {
+          "index": 44,
+          "label": "quote-\"",
+          "numeric": 1.5,
+          "nested": {
+            "z": [
+              44,
+              true,
+              null
+            ],
+            "a": {
+              "β": "beta",
+              "𐀀": "astral",
+              "€": "euro"
+            }
+          }
+        },
+        "execution_defaults": {
+          "navigation_timeout_seconds": 54,
+          "retry": 2
+        }
+      },
+      "content_checksum": "sha256:2ea4a34bd6c717541c854c2264c1f72698248ec561d043246bebb8dda1aa6858",
+      "release_input": {
+        "action_id": "act_0000000000000000000000001D",
+        "revision": 45,
+        "content_checksum": "sha256:2ea4a34bd6c717541c854c2264c1f72698248ec561d043246bebb8dda1aa6858"
+      },
+      "release_checksum": "sha256:602aa9072dd372129d033611eb3fb1826089f2f80c7af9f08d08809d8965e9d6"
+    },
+    {
+      "name": "vector-46",
+      "content_input": {
+        "executor_kind": "comment_campaign",
+        "definition_schema_version": "1.0",
+        "parameter_schema": {
+          "type": "object",
+          "properties": {
+            "target_url": {
+              "type": "string",
+              "maxLength": 2048
+            },
+            "input_text": {
+              "type": "string",
+              "maxLength": 4096
+            }
+          },
+          "additionalProperties": false
+        },
+        "result_schema": {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "ok"
+          ],
+          "additionalProperties": false
+        },
+        "snapshot": {
+          "nested": {
+            "z": [
+              45,
+              true,
+              null
+            ],
+            "a": {
+              "β": "beta",
+              "𐀀": "astral",
+              "€": "euro"
+            }
+          },
+          "numeric": 1e-06,
+          "label": "plain",
+          "index": 45
+        },
+        "execution_defaults": {
+          "navigation_timeout_seconds": 55,
+          "retry": 0
+        }
+      },
+      "content_checksum": "sha256:946addf33242bc93fbd35e1682dea51cb3a1cc237c1bcd1464fbede49b8750b5",
+      "release_input": {
+        "action_id": "act_0000000000000000000000001E",
+        "revision": 46,
+        "content_checksum": "sha256:946addf33242bc93fbd35e1682dea51cb3a1cc237c1bcd1464fbede49b8750b5"
+      },
+      "release_checksum": "sha256:1e93ff1d6e36f3661513b08586b60036122c0873ec1add1267356a92a4c068cf"
+    },
+    {
+      "name": "vector-47",
+      "content_input": {
+        "executor_kind": "browser_strategy",
+        "definition_schema_version": "1.0",
+        "parameter_schema": {
+          "type": "object",
+          "properties": {
+            "target_url": {
+              "type": "string",
+              "maxLength": 2048
+            },
+            "input_text": {
+              "type": "string",
+              "maxLength": 4096
+            }
+          },
+          "additionalProperties": false
+        },
+        "result_schema": {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "ok"
+          ],
+          "additionalProperties": false
+        },
+        "snapshot": {
+          "index": 46,
+          "label": "中文",
+          "numeric": 1e-07,
+          "nested": {
+            "z": [
+              46,
+              true,
+              null
+            ],
+            "a": {
+              "β": "beta",
+              "𐀀": "astral",
+              "€": "euro"
+            }
+          }
+        },
+        "execution_defaults": {
+          "navigation_timeout_seconds": 56,
+          "retry": 1
+        }
+      },
+      "content_checksum": "sha256:804c4a2ae5436ee15918b405e3a54306a020bef42e93de65829ae0635e68d73c",
+      "release_input": {
+        "action_id": "act_0000000000000000000000001F",
+        "revision": 47,
+        "content_checksum": "sha256:804c4a2ae5436ee15918b405e3a54306a020bef42e93de65829ae0635e68d73c"
+      },
+      "release_checksum": "sha256:9a9cb2140294da3bb01d9f53193dbd9cd1bd906358cc866595e9b50fb4122f0d"
+    },
+    {
+      "name": "vector-48",
+      "content_input": {
+        "executor_kind": "comment_campaign",
+        "definition_schema_version": "1.0",
+        "parameter_schema": {
+          "type": "object",
+          "properties": {
+            "target_url": {
+              "type": "string",
+              "maxLength": 2048
+            },
+            "input_text": {
+              "type": "string",
+              "maxLength": 4096
+            }
+          },
+          "additionalProperties": false
+        },
+        "result_schema": {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "ok"
+          ],
+          "additionalProperties": false
+        },
+        "snapshot": {
+          "nested": {
+            "z": [
+              47,
+              true,
+              null
+            ],
+            "a": {
+              "β": "beta",
+              "𐀀": "astral",
+              "€": "euro"
+            }
+          },
+          "numeric": 1e-20,
+          "label": "emoji-🚀",
+          "index": 47
+        },
+        "execution_defaults": {
+          "navigation_timeout_seconds": 57,
+          "retry": 2
+        }
+      },
+      "content_checksum": "sha256:1052e89fe75bc4a5d0d5883b19c02494817bd6efe38196d7c12af1abd011edfa",
+      "release_input": {
+        "action_id": "act_0000000000000000000000001G",
+        "revision": 48,
+        "content_checksum": "sha256:1052e89fe75bc4a5d0d5883b19c02494817bd6efe38196d7c12af1abd011edfa"
+      },
+      "release_checksum": "sha256:b122eaafc7652c79d5cc7f31fd07479dfd99b7d5f33244d166042f06845b12dd"
+    },
+    {
+      "name": "vector-49",
+      "content_input": {
+        "executor_kind": "browser_strategy",
+        "definition_schema_version": "1.0",
+        "parameter_schema": {
+          "type": "object",
+          "properties": {
+            "target_url": {
+              "type": "string",
+              "maxLength": 2048
+            },
+            "input_text": {
+              "type": "string",
+              "maxLength": 4096
+            }
+          },
+          "additionalProperties": false
+        },
+        "result_schema": {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "ok"
+          ],
+          "additionalProperties": false
+        },
+        "snapshot": {
+          "index": 48,
+          "label": "line\nbreak",
+          "numeric": 1e-21,
+          "nested": {
+            "z": [
+              48,
+              true,
+              null
+            ],
+            "a": {
+              "β": "beta",
+              "𐀀": "astral",
+              "€": "euro"
+            }
+          }
+        },
+        "execution_defaults": {
+          "navigation_timeout_seconds": 58,
+          "retry": 0
+        }
+      },
+      "content_checksum": "sha256:198f94633c7c71079d377c834b95bdb5d0573e6239a4be973a84c1baf4d49983",
+      "release_input": {
+        "action_id": "act_0000000000000000000000001H",
+        "revision": 49,
+        "content_checksum": "sha256:198f94633c7c71079d377c834b95bdb5d0573e6239a4be973a84c1baf4d49983"
+      },
+      "release_checksum": "sha256:713c2f186df638145d5adfcec30fc61807d3f63dce282819a5258220fb2aeadb"
+    },
+    {
+      "name": "vector-50",
+      "content_input": {
+        "executor_kind": "comment_campaign",
+        "definition_schema_version": "1.0",
+        "parameter_schema": {
+          "type": "object",
+          "properties": {
+            "target_url": {
+              "type": "string",
+              "maxLength": 2048
+            },
+            "input_text": {
+              "type": "string",
+              "maxLength": 4096
+            }
+          },
+          "additionalProperties": false
+        },
+        "result_schema": {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "ok"
+          ],
+          "additionalProperties": false
+        },
+        "snapshot": {
+          "nested": {
+            "z": [
+              49,
+              true,
+              null
+            ],
+            "a": {
+              "β": "beta",
+              "𐀀": "astral",
+              "€": "euro"
+            }
+          },
+          "numeric": 333333333.3333333,
+          "label": "quote-\"",
+          "index": 49
+        },
+        "execution_defaults": {
+          "navigation_timeout_seconds": 59,
+          "retry": 1
+        }
+      },
+      "content_checksum": "sha256:6394cd818028b9227ffa84fcb72da0958dfee14b8d72ad250498e77e06a3008f",
+      "release_input": {
+        "action_id": "act_0000000000000000000000001J",
+        "revision": 50,
+        "content_checksum": "sha256:6394cd818028b9227ffa84fcb72da0958dfee14b8d72ad250498e77e06a3008f"
+      },
+      "release_checksum": "sha256:30d0694b6678e860674eed233d12be4d9a72e7601e67a5615d10c8dd01822d15"
+    }
+  ]
+}

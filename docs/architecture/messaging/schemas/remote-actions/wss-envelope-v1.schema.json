@@ -1,0 +1,101 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:juzhen:remote-actions:wss-envelope:v1",
+  "title": "Remote action WSS envelope v1",
+  "type": "object",
+  "properties": {
+    "type": {
+      "enum": [
+        "WORK_ORDER_DELIVER",
+        "COMMAND_ACK",
+        "WORK_ORDER_CANCEL",
+        "PROGRESS_EVENT",
+        "TERMINAL_REFERENCE",
+        "RECONCILE_REQUEST",
+        "RECONCILE_RESPONSE"
+      ]
+    },
+    "protocol_version": {"const": "1.0"},
+    "message_id": {
+      "type": "string",
+      "pattern": "^msg_[A-Za-z0-9_-]{1,76}$",
+      "maxLength": 80
+    },
+    "device_id": {
+      "type": "string",
+      "pattern": "^dev_[A-Za-z0-9_-]{1,76}$",
+      "maxLength": 80
+    },
+    "session_id": {
+      "type": "string",
+      "pattern": "^sess_[A-Za-z0-9_-]{1,75}$",
+      "maxLength": 80
+    },
+    "server_sequence": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9223372036854775807
+    },
+    "sent_at": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$",
+      "maxLength": 24
+    },
+    "payload": {"type": "object", "maxProperties": 64}
+  },
+  "required": [
+    "type",
+    "protocol_version",
+    "message_id",
+    "device_id",
+    "session_id",
+    "sent_at",
+    "payload"
+  ],
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "enum": ["WORK_ORDER_DELIVER", "WORK_ORDER_CANCEL", "RECONCILE_RESPONSE"]
+          }
+        },
+        "required": ["type"]
+      },
+      "then": {"required": ["server_sequence"]},
+      "else": {"not": {"required": ["server_sequence"]}}
+    },
+    {
+      "if": {"properties": {"type": {"const": "WORK_ORDER_DELIVER"}}, "required": ["type"]},
+      "then": {"properties": {"payload": {"$ref": "urn:juzhen:remote-actions:work-order:v1"}}}
+    },
+    {
+      "if": {"properties": {"type": {"const": "COMMAND_ACK"}}, "required": ["type"]},
+      "then": {"properties": {"payload": {"$ref": "urn:juzhen:remote-actions:command-ack:v1"}}}
+    },
+    {
+      "if": {"properties": {"type": {"const": "WORK_ORDER_CANCEL"}}, "required": ["type"]},
+      "then": {"properties": {"payload": {"$ref": "urn:juzhen:remote-actions:cancel-command:v1"}}}
+    },
+    {
+      "if": {"properties": {"type": {"const": "PROGRESS_EVENT"}}, "required": ["type"]},
+      "then": {"properties": {"payload": {"$ref": "urn:juzhen:remote-actions:progress-event:v1"}}}
+    },
+    {
+      "if": {"properties": {"type": {"const": "TERMINAL_REFERENCE"}}, "required": ["type"]},
+      "then": {"properties": {"payload": {"$ref": "urn:juzhen:remote-actions:terminal-reference:v1"}}}
+    },
+    {
+      "if": {"properties": {"type": {"const": "RECONCILE_REQUEST"}}, "required": ["type"]},
+      "then": {"properties": {"payload": {"$ref": "urn:juzhen:remote-actions:reconcile-request:v1"}}}
+    },
+    {
+      "if": {"properties": {"type": {"const": "RECONCILE_RESPONSE"}}, "required": ["type"]},
+      "then": {"properties": {"payload": {"$ref": "urn:juzhen:remote-actions:reconcile-response:v1"}}}
+    }
+  ],
+  "x-maxBytes": 1048576,
+  "x-maxDepth": 32,
+  "additionalProperties": false
+}

@@ -1,0 +1,5 @@
+{
+  "code": 200,
+  "router": "/api/tiktok/web/get_sec_user_id",
+  "data": "MS4wLjABAAAA-example-sec-uid"
+}

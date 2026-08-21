@@ -1,0 +1,26 @@
+{% set console_mode = console_mode|default(false) %}
+<div id="page-elements-workspace" class="page-elements-workspace{% if console_mode %} console-page-elements-workspace{% endif %}" data-console-mode="{{ 'true' if console_mode else 'false' }}">
+  <form id="v2-picker-form" class="{% if console_mode %}console-section{% else %}v2-card{% endif %} v2-form-grid">
+    <label>测试 Profile<select id="v2-picker-profile" required disabled></select></label>
+    <label class="v2-span-2">目标网址<input id="v2-picker-url" type="url" value="https://www.tiktok.com/" required></label>
+    <div class="v2-actions v2-span-3"><button id="v2-picker-start" class="v2-button primary{% if console_mode %} console-button{% endif %}" type="submit" disabled>开始点选器</button><button id="v2-picker-finish" class="v2-button{% if console_mode %} console-button{% endif %}" type="button" disabled>完成点选</button><button id="v2-picker-cancel" class="v2-button danger{% if console_mode %} console-button{% endif %}" type="button" disabled>取消点选</button></div>
+  </form>
+
+  <section class="{% if console_mode %}console-section{% else %}v2-card{% endif %}" aria-labelledby="v2-picker-title">
+    <div class="{% if console_mode %}console-section-head{% else %}v2-section-heading{% endif %}"><div><h3 id="v2-picker-title">当前点选</h3><p id="v2-picker-state" class="{% if console_mode %}console-status{% else %}v2-muted{% endif %}">尚未开启点选器。</p></div></div>
+    <div id="v2-picker-candidates" class="v2-candidates"></div>
+  </section>
+
+  <section class="{% if console_mode %}console-section{% else %}v2-card{% endif %}" aria-labelledby="v2-elements-list-title">
+    <div class="{% if console_mode %}console-section-head{% else %}v2-section-heading{% endif %}"><div><h3 id="v2-elements-list-title">已保存元素</h3>{% if console_mode %}<p>保留页面点选产生的完整定位定义和诊断信息。</p>{% endif %}</div><label>校验 Profile<select id="v2-element-validate-profile" aria-label="校验 Profile" disabled></select></label></div>
+    {% if console_mode %}
+    <div class="console-filter-row page-elements-filters" id="v2-elements-filters">
+      <label><span>搜索</span><input id="v2-elements-search" class="console-control search" type="search" placeholder="名称、URL、角色或文本"></label>
+      <label><span>类型</span><select id="v2-elements-kind-filter" class="console-control"><option value="">全部类型</option><option value="click">点击</option><option value="input">输入</option><option value="generic">通用</option></select></label>
+      <label><span>状态</span><select id="v2-elements-status-filter" class="console-control"><option value="">全部状态</option><option value="active">启用</option><option value="disabled">停用</option></select></label>
+    </div>
+    {% endif %}
+    <div id="v2-elements-list" class="{% if console_mode %}page-elements-list{% else %}v2-list{% endif %}"></div>
+    <p id="v2-elements-empty" class="{% if console_mode %}console-empty{% else %}v2-muted{% endif %}">暂无已保存元素。</p>
+  </section>
+</div>

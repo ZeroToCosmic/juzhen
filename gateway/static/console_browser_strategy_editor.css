@@ -1,0 +1,281 @@
+.strategy-editor-head {
+  align-items: center;
+}
+
+.strategy-editor-head > div:first-child {
+  min-width: 0;
+}
+
+.strategy-editor-actions {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.strategy-enabled-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 34px;
+  padding: 0 9px;
+  color: var(--console-text);
+  font-size: 12px;
+  background: var(--console-soft);
+  border: 1px solid var(--console-line);
+  border-radius: 7px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.strategy-enabled-toggle input {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  accent-color: var(--console-primary);
+}
+
+#strategy-editor-workspace {
+  min-width: 0;
+}
+
+.strategy-settings-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.strategy-settings-grid label,
+.strategy-action-fields label {
+  min-width: 0;
+}
+
+.strategy-settings-grid label > span,
+.strategy-action-fields label > span {
+  line-height: 1.35;
+}
+
+.strategy-action-palette {
+  margin: 0;
+  padding: 11px;
+  border: 1px dashed var(--console-line);
+  border-radius: 8px;
+}
+
+.strategy-action-palette legend {
+  padding: 0 5px;
+  color: var(--console-muted);
+  font-size: 11px;
+}
+
+.strategy-action-palette .console-actions {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+}
+
+.strategy-action-list {
+  display: grid;
+  gap: 10px;
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: strategy-action;
+}
+
+.strategy-action-card {
+  min-width: 0;
+  padding: 13px;
+  background: var(--console-soft);
+  border: 1px solid var(--console-line);
+  border-radius: 8px;
+  counter-increment: strategy-action;
+}
+
+.strategy-action-card > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.strategy-action-card > header strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+}
+
+.strategy-action-card > header strong::before {
+  color: var(--console-muted);
+  content: counter(strategy-action) ". ";
+  font-variant-numeric: tabular-nums;
+}
+
+.strategy-action-card .console-actions {
+  flex: 0 0 auto;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+.strategy-action-fields {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.strategy-action-fields .wide,
+.strategy-action-fields [data-span="full"] {
+  grid-column: 1 / -1;
+}
+
+.strategy-action-fields input,
+.strategy-action-fields select,
+.strategy-action-fields textarea {
+  width: 100%;
+  min-width: 0;
+}
+
+.strategy-action-fields textarea {
+  min-height: 70px;
+  resize: vertical;
+}
+
+.strategy-help,
+.strategy-action-help,
+.strategy-field-help {
+  display: block;
+  margin-top: 4px;
+  color: var(--console-muted);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.strategy-editor-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.strategy-editor-footer > div:first-child,
+.strategy-editor-footer h2,
+.strategy-editor-footer p {
+  min-width: 0;
+}
+
+.strategy-editor-footer p {
+  margin: 5px 0 0;
+  color: var(--console-muted);
+  font-size: 11px;
+}
+
+.strategy-editor-footer .console-actions {
+  flex: 0 0 auto;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+.console-button.danger {
+  color: #a23442;
+  background: #fff6f7;
+  border-color: #e5aab3;
+}
+
+.console-button.danger:hover:not(:disabled) {
+  color: #fff;
+  background: #b33d4c;
+  border-color: #b33d4c;
+}
+
+.console-button.danger:focus-visible {
+  outline: 2px solid #d16b78;
+  outline-offset: 2px;
+}
+
+.strategy-editor-footer:has(.console-button.danger) {
+  border-color: #e5c4c8;
+}
+
+#strategy-status {
+  margin: 10px 2px 0;
+}
+
+#strategy-status.loading,
+#strategy-status[aria-busy="true"] {
+  color: var(--console-primary);
+}
+
+#strategy-status.error,
+#strategy-status[data-state="error"] {
+  color: #ad3441;
+}
+
+#strategy-status.success,
+#strategy-status[data-state="success"] {
+  color: #17714a;
+}
+
+#console-browser-strategy-editor.is-loading .console-section,
+#console-browser-strategy-editor[data-loading="true"] .console-section {
+  opacity: .72;
+}
+
+#console-browser-strategy-editor.is-loading .console-button,
+#console-browser-strategy-editor[data-loading="true"] .console-button {
+  cursor: wait;
+}
+
+#console-browser-strategy-editor.is-disabled .console-section,
+#console-browser-strategy-editor[data-disabled="true"] .console-section {
+  opacity: .64;
+}
+
+#console-browser-strategy-editor.is-error .console-section,
+#console-browser-strategy-editor[data-state="error"] .console-section {
+  border-color: #e5c4c8;
+}
+
+@media (max-width: 980px) {
+  .strategy-settings-grid,
+  .strategy-action-fields {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 560px) {
+  .strategy-editor-head {
+    align-items: stretch;
+  }
+
+  .strategy-editor-actions,
+  .strategy-editor-footer,
+  .strategy-action-card > header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .strategy-editor-actions,
+  .strategy-editor-footer .console-actions,
+  .strategy-action-card .console-actions {
+    justify-content: stretch;
+  }
+
+  .strategy-editor-actions > *,
+  .strategy-editor-footer .console-button,
+  .strategy-action-card .console-button {
+    width: 100%;
+  }
+
+  .strategy-settings-grid,
+  .strategy-action-fields {
+    grid-template-columns: 1fr;
+  }
+
+  .strategy-settings-grid .wide,
+  .strategy-action-fields .wide,
+  .strategy-action-fields [data-span="full"] {
+    grid-column: auto;
+  }
+
+  .strategy-action-palette .console-actions {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+}

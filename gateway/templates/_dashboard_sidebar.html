@@ -1,0 +1,24 @@
+<aside class="dashboard-sidebar">
+  <a class="dashboard-brand" href="/console/overview">Agent 自动化主控台</a>
+  <div class="dashboard-device"><b>本机 Agent</b><span>● 状态未知</span></div>
+  <nav class="dashboard-nav" aria-label="主导航">
+    <a class="dashboard-nav-link{% if active_nav == 'overview' %} active{% endif %}" href="/console/overview"{% if active_nav == 'overview' %} aria-current="page"{% endif %}>运行总览</a>
+
+    <span class="dashboard-nav-group">自动化</span>
+    <a class="dashboard-nav-link{% if active_nav in ('task-execution', 'bcs') %} active{% endif %}" href="/console/tasks"{% if active_nav in ('task-execution', 'bcs') %} aria-current="page"{% endif %}>任务执行</a>
+    <a class="dashboard-nav-link{% if active_nav in ('action-library', 'comment-campaign') %} active{% endif %}" href="/console/actions"{% if active_nav in ('action-library', 'comment-campaign') %} aria-current="page"{% endif %}>动作库</a>
+
+    <span class="dashboard-nav-group">业务模块</span>
+    <a class="dashboard-nav-link{% if active_nav == 'publishing' %} active{% endif %}" href="/console/publishing"{% if active_nav == 'publishing' %} aria-current="page"{% endif %}>内容发布</a>
+    <a class="dashboard-nav-link{% if active_nav == 'collection' %} active{% endif %}" href="/console/collection"{% if active_nav == 'collection' %} aria-current="page"{% endif %}>数据采集</a>
+    <a class="dashboard-nav-link{% if active_nav in ('collection-results', 'tiktok-stats') %} active{% endif %}" href="/console/collection-results"{% if active_nav in ('collection-results', 'tiktok-stats') %} aria-current="page"{% endif %}>采集结果</a>
+
+    <span class="dashboard-nav-group">资源与能力</span>
+    <a class="dashboard-nav-link{% if active_nav == 'accounts-windows' %} active{% endif %}" href="/console/accounts-windows"{% if active_nav == 'accounts-windows' %} aria-current="page"{% endif %}>账号与窗口</a>
+    <a class="dashboard-nav-link{% if active_nav == 'page-elements' %} active{% endif %}" href="/console/page-elements"{% if active_nav == 'page-elements' %} aria-current="page"{% endif %}>页面元素</a>
+
+    <span class="dashboard-nav-group">记录与系统</span>
+    <a class="dashboard-nav-link{% if active_nav == 'receipts' %} active{% endif %}" href="/console/receipts"{% if active_nav == 'receipts' %} aria-current="page"{% endif %}>回执与证据</a>
+    <a class="dashboard-nav-link{% if active_nav in ('system-settings', 'settings') %} active{% endif %}" href="/console/settings"{% if active_nav in ('system-settings', 'settings') %} aria-current="page"{% endif %}>系统设置</a>
+  </nav>
+</aside>

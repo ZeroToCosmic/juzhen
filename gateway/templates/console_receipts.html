@@ -1,0 +1,32 @@
+{% extends 'console_base.html' %}
+{% block title %}回执与证据 · Agent 自动化主控台{% endblock %}
+{% block content %}
+<div id="console-receipts" class="console-page">
+  <section id="receipts-list-view">
+    <header class="console-page-head">
+      <div><h1>回执与证据</h1><p>统一查看本机浏览器执行、评论 Campaign 和内容发布结果</p></div>
+      <button class="console-button" id="receipts-refresh" type="button">刷新</button>
+    </header>
+    <section class="console-stat-grid" aria-label="回执概览">
+      <article class="console-stat"><span>记录总数</span><strong id="receipts-total">—</strong><small>最近本机记录</small></article>
+      <article class="console-stat"><span>成功/完成</span><strong id="receipts-success">—</strong><small>终态成功</small></article>
+      <article class="console-stat"><span>执行中/待处理</span><strong id="receipts-pending">—</strong><small>仍需跟进</small></article>
+      <article class="console-stat"><span>异常</span><strong id="receipts-failed">—</strong><small>失败或未验证</small></article>
+    </section>
+    <section class="console-section">
+      <form class="console-filter-row" id="receipts-filters"><label><span>搜索</span><input class="console-control search" name="query" type="search" placeholder="名称、账号、任务或 ID"></label><label><span>来源</span><select class="console-control" name="source"><option value="">全部来源</option><option value="browser">浏览器执行</option><option value="campaign">评论 Campaign</option><option value="publishing">内容发布</option></select></label><label><span>状态</span><select class="console-control" name="status"><option value="">全部状态</option><option value="success">成功/完成</option><option value="pending">执行中/待处理</option><option value="failed">异常</option></select></label><button class="console-button" id="receipts-reset" type="button">重置</button></form>
+      <div class="console-table-wrap"><table class="console-dense-table"><thead><tr><th>记录</th><th>来源</th><th>状态</th><th>对象</th><th>时间</th><th class="num">结果</th><th class="action">操作</th></tr></thead><tbody id="receipts-body"></tbody></table></div>
+      <p class="console-empty" id="receipts-empty" hidden>暂无符合条件的记录。</p>
+      <div class="console-pagination"><span id="receipts-page-meta">第 1 / 1 页</span><div><button class="console-link" id="receipts-prev" type="button">上一页</button><button class="console-link" id="receipts-next" type="button">下一页</button></div></div>
+    </section>
+  </section>
+  <section id="receipts-detail-view" hidden>
+    <header class="console-page-head"><div><button class="console-back-button" id="receipts-detail-back" type="button">← 返回回执列表</button><h1 id="receipts-detail-title">回执详情</h1><p id="receipts-detail-subtitle"></p></div></header>
+    <section class="console-section"><div class="console-key-values console-detail-summary" id="receipts-detail-summary"></div></section>
+    <section class="console-section"><div class="console-section-head"><div><h2>执行明细</h2><p>业务字段优先，技术字段仅在异常诊断中展示</p></div></div><div id="receipts-detail-body" class="console-detail-list"></div></section>
+    <section class="console-section" id="receipts-evidence-section" hidden><div class="console-section-head"><div><h2>证据</h2><p>仅展示经过后端校验的本机证据链接</p></div></div><div id="receipts-evidence-list" class="console-evidence-grid"></div></section>
+  </section>
+  <p class="console-status" id="receipts-status" role="status"></p>
+</div>
+{% endblock %}
+{% block scripts %}<script src="{{ url_for('static', filename='console_receipts.js') }}"></script>{% endblock %}

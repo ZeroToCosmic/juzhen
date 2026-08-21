@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="csrf-token" content="{{ csrf_token }}">
+  <title>业务控制系统</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='dashboard_shell.css') }}">
+  <style>
+    .bcs-layout { display: grid; grid-template-columns: 260px minmax(0, 1fr); min-height: 100vh; }
+    .bcs-content { padding: 24px; }
+    .bcs-tabs { display: flex; gap: 8px; margin-bottom: 20px; }
+    .bcs-tab { padding: 8px 16px; border: 1px solid #d1d5db; border-radius: 6px; text-decoration: none; color: #374151; }
+    .bcs-tab.active { background: #2563eb; color: white; border-color: #2563eb; }
+    .bcs-panel { display: none; }
+    .bcs-panel.active { display: block; }
+    .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+    .stat-card { border: 1px solid #e5e7eb; border-radius: 8px; padding: 14px; background: white; }
+    .stat-card .label { color: #6b7280; font-size: 12px; }
+    .stat-card .value { font-size: 22px; font-weight: 600; margin-top: 4px; }
+    table { width: 100%; border-collapse: collapse; background: white; }
+    th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #e5e7eb; font-size: 13px; }
+    th { background: #f9fafb; }
+    .status-badge { padding: 2px 8px; border-radius: 10px; font-size: 12px; }
+    .status-ok { background: #dcfce7; color: #166534; }
+    .status-warn { background: #fef9c3; color: #854d0e; }
+    .status-err { background: #fee2e2; color: #991b1b; }
+    .status-info { background: #dbeafe; color: #1e40af; }
+    form { display: grid; gap: 10px; max-width: 520px; }
+    label { font-size: 13px; color: #374151; }
+    input, select, textarea { padding: 7px 10px; border: 1px solid #d1d5db; border-radius: 6px; }
+    button { padding: 8px 14px; border: 0; border-radius: 6px; background: #2563eb; color: white; cursor: pointer; }
+    .error-text { color: #991b1b; font-size: 13px; min-height: 18px; }
+    .ok-text { color: #166534; font-size: 13px; min-height: 18px; }
+  </style>
+</head>
+<body>
+  <div class="bcs-layout">
+    {% include "_dashboard_sidebar.html" %}
+    <main class="bcs-content">
+      <h1>业务控制系统</h1>
+      <nav class="bcs-tabs" aria-label="业务控制系统">
+        <a class="bcs-tab{% if panel == 'dashboard' %} active{% endif %}" href="/bcs" data-panel="dashboard">看板</a>
+        <a class="bcs-tab{% if panel == 'devices' %} active{% endif %}" href="/bcs/devices" data-panel="devices">设备</a>
+        <a class="bcs-tab{% if panel == 'tasks' %} active{% endif %}" href="/bcs/tasks" data-panel="tasks">任务</a>
+      </nav>
+
+      <section class="bcs-panel{% if panel == 'dashboard' %} active{% endif %}" id="panel-dashboard">
+        <div class="stat-grid" id="dashboard-stats"></div>
+        <p class="error-text" id="dashboard-error"></p>
+      </section>
+
+      <section class="bcs-panel{% if panel == 'devices' %} active{% endif %}" id="panel-devices">
+        <table>
+          <thead><tr><th>设备</th><th>状态</th><th>版本</th><th>容量</th><th>能力</th><th>心跳</th><th>操作</th></tr></thead>
+          <tbody id="devices-body"></tbody>
+        </table>
+        <p class="error-text" id="devices-error"></p>
+      </section>
+
+      <section class="bcs-panel{% if panel == 'tasks' %} active{% endif %}" id="panel-tasks">
+        <h2>创建任务</h2>
+        <form id="task-form">
+          <label>任务类型
+            <select name="task_type">
+              <option value="browse">浏览</option>
+              <option value="comment">评论</option>
+              <option value="publish">发布</option>
+              <option value="like">点赞</option>
+              <option value="follow">关注</option>
+            </select>
+          </label>
+          <label>账号 ID（逗号分隔）
+            <input name="account_ids" required placeholder="acc-1,acc-2">
+          </label>
+          <label>参数（JSON，可选）
+            <textarea name="params" rows="3">{"text": "hello"}</textarea>
+          </label>
+          <label>优先级
+            <select name="priority"><option value="medium">中</option><option value="high">高</option><option value="low">低</option></select>
+          </label>
+          <button type="submit">创建任务</button>
+        </form>
+        <p class="ok-text" id="task-result"></p>
+        <p class="error-text" id="tasks-error"></p>
+        <h2>子任务状态</h2>
+        <table><thead><tr><th>状态</th><th>数量</th></tr></thead><tbody id="subtasks-body"></tbody></table>
+      </section>
+    </main>
+  </div>
+  <script src="{{ url_for('static', filename='bcs.js') }}"></script>
+</body>
+</html>

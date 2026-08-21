@@ -1,0 +1,121 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:juzhen:remote-actions:effect-permit:v1",
+  "title": "Remote action effect permit HTTPS payloads v1",
+  "$defs": {
+    "permit_request": {
+      "type": "object",
+      "properties": {
+        "operation": {"const": "permit_request"},
+        "work_order_id": {"type": "string", "pattern": "^wo_[A-Za-z0-9_-]{1,77}$", "maxLength": 80},
+        "effect_id": {"type": "string", "pattern": "^effect_[A-Za-z0-9_-]{1,73}$", "maxLength": 80},
+        "device_id": {"type": "string", "pattern": "^dev_[A-Za-z0-9_-]{1,76}$", "maxLength": 80},
+        "session_id": {"type": "string", "pattern": "^sess_[A-Za-z0-9_-]{1,75}$", "maxLength": 80},
+        "lease_generation": {"type": "integer", "minimum": 1, "maximum": 9223372036854775807},
+        "run_id": {"type": "string", "pattern": "^run_[A-Za-z0-9_-]{1,76}$", "maxLength": 80},
+        "request_id": {"type": "string", "pattern": "^req_[A-Za-z0-9_-]{1,76}$", "maxLength": 80}
+      },
+      "required": [
+        "operation",
+        "work_order_id",
+        "effect_id",
+        "device_id",
+        "session_id",
+        "lease_generation",
+        "run_id",
+        "request_id"
+      ],
+      "additionalProperties": false
+    },
+    "permit_issued": {
+      "type": "object",
+      "properties": {
+        "operation": {"const": "permit_issued"},
+        "work_order_id": {"type": "string", "pattern": "^wo_[A-Za-z0-9_-]{1,77}$", "maxLength": 80},
+        "effect_id": {"type": "string", "pattern": "^effect_[A-Za-z0-9_-]{1,73}$", "maxLength": 80},
+        "request_id": {"type": "string", "pattern": "^req_[A-Za-z0-9_-]{1,76}$", "maxLength": 80},
+        "permit_id": {"type": "string", "pattern": "^permit_[A-Za-z0-9_-]{1,73}$", "maxLength": 80},
+        "permit_attempt": {"type": "integer", "minimum": 1, "maximum": 9223372036854775807},
+        "lease_generation": {"type": "integer", "minimum": 1, "maximum": 9223372036854775807},
+        "issued_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$",
+          "maxLength": 24
+        }
+      },
+      "required": [
+        "operation",
+        "work_order_id",
+        "effect_id",
+        "request_id",
+        "permit_id",
+        "permit_attempt",
+        "lease_generation",
+        "issued_at"
+      ],
+      "additionalProperties": false
+    },
+    "permit_denied": {
+      "type": "object",
+      "properties": {
+        "operation": {"const": "permit_denied"},
+        "work_order_id": {"type": "string", "pattern": "^wo_[A-Za-z0-9_-]{1,77}$", "maxLength": 80},
+        "effect_id": {"type": "string", "pattern": "^effect_[A-Za-z0-9_-]{1,73}$", "maxLength": 80},
+        "request_id": {"type": "string", "pattern": "^req_[A-Za-z0-9_-]{1,76}$", "maxLength": 80},
+        "denial_code": {"type": "string", "minLength": 1, "maxLength": 64}
+      },
+      "required": ["operation", "work_order_id", "effect_id", "request_id", "denial_code"],
+      "additionalProperties": false
+    },
+    "close_unused_request": {
+      "type": "object",
+      "properties": {
+        "operation": {"const": "close_unused_request"},
+        "work_order_id": {"type": "string", "pattern": "^wo_[A-Za-z0-9_-]{1,77}$", "maxLength": 80},
+        "effect_id": {"type": "string", "pattern": "^effect_[A-Za-z0-9_-]{1,73}$", "maxLength": 80},
+        "device_id": {"type": "string", "pattern": "^dev_[A-Za-z0-9_-]{1,76}$", "maxLength": 80},
+        "session_id": {"type": "string", "pattern": "^sess_[A-Za-z0-9_-]{1,75}$", "maxLength": 80},
+        "lease_generation": {"type": "integer", "minimum": 1, "maximum": 9223372036854775807},
+        "run_id": {"type": "string", "pattern": "^run_[A-Za-z0-9_-]{1,76}$", "maxLength": 80},
+        "permit_id": {"type": "string", "pattern": "^permit_[A-Za-z0-9_-]{1,73}$", "maxLength": 80}
+      },
+      "required": [
+        "operation",
+        "work_order_id",
+        "effect_id",
+        "device_id",
+        "session_id",
+        "lease_generation",
+        "run_id",
+        "permit_id"
+      ],
+      "additionalProperties": false
+    },
+    "close_unused_response": {
+      "type": "object",
+      "properties": {
+        "operation": {"const": "close_unused_response"},
+        "work_order_id": {"type": "string", "pattern": "^wo_[A-Za-z0-9_-]{1,77}$", "maxLength": 80},
+        "effect_id": {"type": "string", "pattern": "^effect_[A-Za-z0-9_-]{1,73}$", "maxLength": 80},
+        "permit_id": {"type": "string", "pattern": "^permit_[A-Za-z0-9_-]{1,73}$", "maxLength": 80},
+        "status": {"const": "CLOSED_UNUSED"},
+        "closed_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$",
+          "maxLength": 24
+        }
+      },
+      "required": ["operation", "work_order_id", "effect_id", "permit_id", "status", "closed_at"],
+      "additionalProperties": false
+    }
+  },
+  "oneOf": [
+    {"$ref": "#/$defs/permit_request"},
+    {"$ref": "#/$defs/permit_issued"},
+    {"$ref": "#/$defs/permit_denied"},
+    {"$ref": "#/$defs/close_unused_request"},
+    {"$ref": "#/$defs/close_unused_response"}
+  ]
+}

@@ -1,0 +1,31 @@
+{% extends 'console_base.html' %}
+{% block title %}采集结果 · Agent 自动化主控台{% endblock %}
+{% block content %}
+<div id="console-collection-results" class="console-page">
+  <header class="console-page-head">
+    <div><h1>采集结果</h1><p>集中查看视频与账号的核心业务指标</p></div>
+    <button class="console-button" id="results-refresh" type="button">刷新数据</button>
+  </header>
+  <section class="console-stat-grid" aria-label="结果汇总">
+    <article class="console-stat"><span>视频数</span><strong id="results-video-count">—</strong><small>当前筛选结果</small></article>
+    <article class="console-stat"><span>总播放</span><strong id="results-total-views">—</strong><small>最新记录汇总</small></article>
+    <article class="console-stat"><span>总点赞</span><strong id="results-total-likes">—</strong><small>最新记录汇总</small></article>
+    <article class="console-stat"><span>总评论</span><strong id="results-total-comments">—</strong><small>最新记录汇总</small></article>
+  </section>
+  <form class="console-filter-row" id="results-filters">
+    <input class="console-control search" name="query" type="search" placeholder="搜索视频标题、作品 ID 或链接" autocomplete="off">
+    <label><span>发布时间从</span><input class="console-control" name="published_from" type="date"></label>
+    <label><span>至</span><input class="console-control" name="published_to" type="date"></label>
+    <select class="console-control" name="account_id" aria-label="账号"><option value="">账号：全部</option></select>
+    <button class="console-button" type="button" id="results-reset">重置</button>
+  </form>
+  <section class="console-section results-section">
+    <div class="console-table-wrap"><table class="results-table"><thead><tr><th>视频信息</th><th>账号</th><th><button data-sort="published_at" type="button">发布时间</button></th><th class="num"><button data-sort="views" type="button">播放</button></th><th class="num"><button data-sort="likes" type="button">点赞</button></th><th class="num"><button data-sort="comments" type="button">评论</button></th><th><button data-sort="last_collected_at" type="button">最近采集 ↓</button></th><th class="action"></th></tr></thead><tbody id="results-body"></tbody></table></div>
+    <p class="console-empty" id="results-empty" hidden>当前筛选条件下暂无视频数据。</p>
+    <footer class="console-pagination"><span id="results-page-meta">第 1 页</span><div><button class="console-link" id="results-prev" type="button">← 上一页</button><button class="console-link" id="results-next" type="button">下一页 →</button></div></footer>
+  </section>
+  <p class="console-status" id="results-status" role="status"></p>
+</div>
+{% endblock %}
+{% block scripts %}<script src="{{ url_for('static', filename='console_collection_results.js') }}"></script>{% endblock %}
+

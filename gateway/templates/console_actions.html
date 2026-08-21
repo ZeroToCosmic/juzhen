@@ -1,0 +1,28 @@
+{% extends 'console_base.html' %}
+{% block title %}动作库 · Agent 自动化主控台{% endblock %}
+{% block content %}
+<div id="console-actions" class="console-page">
+  <header class="console-page-head">
+    <div><h1>动作库</h1><p>统一维护本机可执行的浏览器策略和评论 Campaign</p></div>
+    <div class="console-actions"><button class="console-button" id="actions-refresh" type="button">刷新</button><a class="console-button" href="{{ url_for('console.comment_trees') }}">评论树管理</a><a class="console-button" href="{{ url_for('console.new_comment_campaign') }}">新建评论 Campaign</a><a class="console-button primary" href="{{ url_for('console.new_browser_strategy') }}">新建浏览器策略</a></div>
+  </header>
+  <section class="console-stat-grid" aria-label="动作库统计">
+    <article class="console-stat"><span>动作总数</span><strong id="actions-total">—</strong><small>本机定义</small></article>
+    <article class="console-stat"><span>浏览器策略</span><strong id="actions-strategies">—</strong><small id="actions-strategies-note">正在读取</small></article>
+    <article class="console-stat"><span>评论 Campaign</span><strong id="actions-campaigns">—</strong><small id="actions-campaigns-note">正在读取</small></article>
+    <article class="console-stat"><span>需关注</span><strong id="actions-attention">—</strong><small>异常、暂停或待审批</small></article>
+  </section>
+  <section class="console-section">
+    <form class="console-filter-row" id="actions-filters">
+      <label><span>搜索</span><input class="console-control search" name="query" type="search" placeholder="名称或 ID"></label>
+      <label><span>类型</span><select class="console-control" name="type"><option value="">全部动作</option><option value="strategy">浏览器策略</option><option value="campaign">评论 Campaign</option></select></label>
+      <label><span>状态</span><select class="console-control" name="status"><option value="">全部状态</option><option value="active">可用/执行中</option><option value="attention">需关注</option><option value="inactive">停用/已结束</option></select></label>
+      <button class="console-button" id="actions-reset" type="button">重置</button>
+    </form>
+    <div class="console-table-wrap"><table class="console-dense-table"><thead><tr><th>动作</th><th>类型</th><th>状态</th><th class="num">规模</th><th>最近更新</th><th>数据来源</th><th class="action">操作</th></tr></thead><tbody id="actions-body"></tbody></table></div>
+    <p class="console-empty" id="actions-empty" hidden>暂无符合条件的动作。</p>
+  </section>
+  <p class="console-status" id="actions-status" role="status"></p>
+</div>
+{% endblock %}
+{% block scripts %}<script src="{{ url_for('static', filename='console_actions.js') }}"></script>{% endblock %}

@@ -1,0 +1,11 @@
+{% extends 'console_base.html' %}
+{% block title %}任务执行 · Agent 自动化主控台{% endblock %}
+{% block content %}
+<div id="console-tasks" class="console-page">
+  <header class="console-page-head"><div><h1>任务执行</h1><p>只读展示中控下发到本机 Agent 的任务</p></div><button class="console-button" id="tasks-refresh" type="button">刷新</button></header>
+  <section class="console-section"><div class="console-table-wrap"><table><thead><tr><th>任务</th><th>类型</th><th>状态</th><th>更新时间</th></tr></thead><tbody id="tasks-body"></tbody></table></div><p class="console-empty" id="tasks-empty" hidden>当前没有下发到本机的任务。</p></section>
+  <p class="console-status" id="tasks-status" role="status"></p>
+</div>
+{% endblock %}
+{% block scripts %}<script src="{{ url_for('static', filename='console_tasks.js') }}"></script>{% endblock %}
+

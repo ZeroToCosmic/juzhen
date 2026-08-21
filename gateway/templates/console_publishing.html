@@ -1,0 +1,51 @@
+{% extends 'console_base.html' %}
+{% block title %}内容发布 · Agent 自动化主控台{% endblock %}
+{% block content %}
+<div id="console-publishing" class="console-page">
+  <header class="console-page-head">
+    <div><h1>内容发布</h1><p>面向每日数百条任务的批量发布工作台</p></div>
+    <div class="console-actions"><button class="console-button" id="publishing-refresh" type="button">刷新</button><button class="console-button" id="publishing-manual-open" type="button">本机调试</button><button class="console-button primary" id="publishing-batch-open" type="button">创建批量发布</button></div>
+  </header>
+  <section class="console-stat-grid" aria-label="发布概览">
+    <article class="console-stat"><span>当日任务</span><strong id="publishing-total">—</strong><small id="publishing-date-note">今天</small></article>
+    <article class="console-stat"><span>成功</span><strong id="publishing-success">—</strong><small>已取得发布结果</small></article>
+    <article class="console-stat"><span>失败</span><strong id="publishing-failed">—</strong><small>需要处理</small></article>
+    <article class="console-stat"><span>可用视频</span><strong id="publishing-videos">—</strong><small id="publishing-content-note">R2 内容库</small></article>
+  </section>
+  <section class="console-section">
+    <div class="console-section-head"><div><h2>发布任务</h2><p>优先查看失败与待发布任务；支持账号、Profile 和文案检索</p></div></div>
+    <form class="console-filter-row" id="publishing-filters">
+      <label><span>生成日期</span><input class="console-control" name="date" type="date"></label>
+      <label><span>状态</span><select class="console-control" name="status"><option value="">全部</option><option value="pending">待发布</option><option value="success">成功</option><option value="failed">失败</option></select></label>
+      <label><span>搜索</span><input class="console-control search" name="query" type="search" placeholder="账号、Profile、文案或失败原因"></label>
+      <button class="console-button" id="publishing-filter-reset" type="button">今天</button>
+    </form>
+    <div class="console-table-wrap"><table class="console-dense-table publishing-results-table"><thead><tr><th>计划时间</th><th>账号</th><th>Profile</th><th>内容</th><th>状态</th><th>结果</th></tr></thead><tbody id="publishing-results-body"></tbody></table></div>
+    <p class="console-empty" id="publishing-results-empty" hidden>当前条件下没有发布任务。</p>
+    <div class="console-pagination"><span id="publishing-results-page-meta">第 1 / 1 页</span><div><button class="console-link" id="publishing-results-prev" type="button">上一页</button><button class="console-link" id="publishing-results-next" type="button">下一页</button></div></div>
+  </section>
+  <div class="console-two-column">
+    <section class="console-section">
+      <div class="console-section-head"><div><h2>内容准备</h2><p>视频来自 R2，文案来自本机品牌文案库</p></div><button class="console-link" id="publishing-sync-videos" type="button">同步 R2</button></div>
+      <div class="console-key-values"><div><span>视频总数</span><strong id="publishing-video-total">—</strong></div><div><span>已使用</span><strong id="publishing-video-used">—</strong></div><div><span>品牌</span><strong id="publishing-brand-total">—</strong></div><div><span>文案</span><strong id="publishing-copy-total">—</strong></div></div>
+      <a class="console-link" href="/?panel=content">维护视频与文案库</a>
+    </section>
+    <section class="console-section">
+      <div class="console-section-head"><div><h2>每日发布配置</h2><p>当前仅保存配置，尚未接入自动调度</p></div><button class="console-link" id="publishing-daily-open" type="button">新建配置</button></div>
+      <div class="console-table-wrap"><table><thead><tr><th>时间</th><th>账号</th><th>品牌</th><th>状态</th><th class="action">操作</th></tr></thead><tbody id="publishing-daily-body"></tbody></table></div>
+      <p class="console-empty" id="publishing-daily-empty" hidden>暂无每日发布计划。</p>
+    </section>
+  </div>
+  <section class="console-section">
+    <div class="console-section-head"><div><h2>最近批次</h2><p>删除批次只移除记录，不会撤销已生成的发布任务</p></div></div>
+    <div class="console-table-wrap"><table><thead><tr><th>创建时间</th><th>计划时间</th><th class="num">账号</th><th class="num">创建</th><th class="num">跳过</th><th>品牌</th><th>状态</th><th class="action">操作</th></tr></thead><tbody id="publishing-batches-body"></tbody></table></div>
+    <p class="console-empty" id="publishing-batches-empty" hidden>暂无批量发布记录。</p>
+  </section>
+  <p class="console-status" id="publishing-status" role="status"></p>
+
+  <dialog class="console-dialog" id="publishing-batch-dialog"><form id="publishing-batch-form"><div class="console-dialog-head"><div><span>正式业务</span><h2>创建批量发布</h2></div><button class="console-icon-button" data-close="publishing-batch-dialog" type="button" aria-label="关闭">×</button></div><div class="console-form-grid"><label>发布日期<input class="console-control" name="date" type="date" required></label><label>发布时间<input class="console-control" name="time" type="time" required></label><label class="wide">品牌<select class="console-control" name="brand_id" required></select></label></div><div class="console-dialog-list"><label class="console-check-all"><input name="select_all" type="checkbox"> 选择全部可用账号</label><div id="publishing-batch-accounts"></div></div><p class="console-status" data-dialog-status></p><div class="console-dialog-actions"><button class="console-button" data-close="publishing-batch-dialog" type="button">取消</button><button class="console-button primary" type="submit">创建任务</button></div></form></dialog>
+  <dialog class="console-dialog" id="publishing-manual-dialog"><form id="publishing-manual-form"><div class="console-dialog-head"><div><span>仅用于调试</span><h2>本机手动发布</h2></div><button class="console-icon-button" data-close="publishing-manual-dialog" type="button" aria-label="关闭">×</button></div><p class="console-warning">此操作会创建真实发布任务并调用 Buffer，不是预览。</p><div class="console-form-grid"><label>账号<select class="console-control" name="account_id" required></select></label><label>Profile<select class="console-control" name="profile_id" required></select></label><label class="wide">视频<select class="console-control" name="video_id" required></select></label><label>品牌<select class="console-control" name="brand_id" required></select></label><label>文案<select class="console-control" name="copy_id" required></select></label><label>发布日期<input class="console-control" name="date" type="date" required></label><label>发布时间<input class="console-control" name="time" type="time" required></label></div><p class="console-status" data-dialog-status></p><div class="console-dialog-actions"><button class="console-button" data-close="publishing-manual-dialog" type="button">取消</button><button class="console-button primary" type="submit">创建调试任务</button></div></form></dialog>
+  <dialog class="console-dialog" id="publishing-daily-dialog"><form id="publishing-daily-form"><div class="console-dialog-head"><div><span>仅保存配置，尚未接入自动调度</span><h2>新建每日发布配置</h2></div><button class="console-icon-button" data-close="publishing-daily-dialog" type="button" aria-label="关闭">×</button></div><div class="console-form-grid"><label>起始日期<input class="console-control" name="start_date" type="date" required></label><label>每日时间<input class="console-control" name="time" type="time" required></label><label class="wide">品牌<select class="console-control" name="brand_id" required></select></label></div><div class="console-dialog-list"><label class="console-check-all"><input name="select_all" type="checkbox"> 选择全部可用账号</label><div id="publishing-daily-accounts"></div></div><p class="console-status" data-dialog-status></p><div class="console-dialog-actions"><button class="console-button" data-close="publishing-daily-dialog" type="button">取消</button><button class="console-button primary" type="submit">保存配置</button></div></form></dialog>
+</div>
+{% endblock %}
+{% block scripts %}<script src="{{ url_for('static', filename='console_publishing.js') }}"></script>{% endblock %}
